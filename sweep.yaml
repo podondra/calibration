@@ -1,0 +1,16 @@
+program: pit.py
+method: random
+metric:
+    name: test
+    goal: minimize
+parameters:
+    embedding_dim:
+        values: [2, 4, 8]
+    hiddens:
+        values: [2, 4, 8, 16, 32, 64, 128]
+    lr:
+        values: [1e-4, 1e-3, 1e-2, 1e-1, 1]
+    output_dim:
+        values: [64, 128, 256, 512, 1024, 2048, 4096]
+    samples:
+        values: [1024, 2048, 4096]
