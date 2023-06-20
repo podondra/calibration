@@ -1,10 +1,9 @@
-from collections import namedtuple
 from copy import deepcopy
 import math
 
 import click
 import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.neighbors import NearestNeighbors
 import torch
 from torch import nn
 from torch.optim import Adam
@@ -17,9 +16,6 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODELPATH = "models/{}.pt"
 
 
-Annotation = namedtuple("Annotation", "weights locs scales pis mus sigmas")
-
-
 def to_tensor(x):
     return torch.tensor(x, dtype=torch.float32)
 
@@ -29,35 +25,45 @@ def pit(dist, y):
 
 
 class Distribution:
-    def pdf(self, x):
-        raise NotImplementedError()
-
-    def cdf(self, x):
-        raise NotImplementedError()
-
-    def sample(self, size):
-        raise NotImplementedError()
+    pass
 
 
 class Normal(Distribution):
     def __init__(self, mu, sigma):
         self.mu, self.sigma = mu, sigma
 
+    def __eq__(self, other):
+        if type(other) is not Normal:
+            return False
+        return self.mu == other.mu and self.sigma == other.sigma
+
+    def __repr__(self):
+        return f"Normal({self.mu}, {self.sigma})"
+
     def pdf(self, x):
-        return ((1.0 / (self.sigma * torch.sqrt(2.0 * math.pi)))
+        return ((1.0 / (self.sigma * torch.sqrt(2.0 * torch.tensor(math.pi))))
                 * torch.exp(-0.5 * ((x - self.mu) / self.sigma) ** 2))
 
     def cdf(self, x):
         return 0.5 + 0.5 * torch.erf((x - self.mu) / (self.sigma * math.sqrt(2.0)))
 
     def sample(self, size=1):
-        return torch.normal(self.mu, self.sigma, (size, ))
+        size = size if type(size) is tuple else (size, )
+        return torch.normal(self.mu, self.sigma, size)
 
 
 class Mixture(Distribution):
     def __init__(self, weights, dists):
         assert math.isclose(sum(weights), 1.0)
         self.weights, self.dists = weights, dists
+
+    def __eq__(self, other):
+        if type(other) is not Mixture:   # simplification
+            return False
+        return self.weights == other.weights and self.dists == other.dists
+
+    def __repr__(self):
+        return f"Mixture({self.weights}, {repr(self.dists)})"
 
     def pdf(self, x):
         return torch.stack([w * d.pdf(x) for w, d in zip(self.weights, self.dists)]).sum(0)
@@ -70,81 +76,74 @@ class Mixture(Distribution):
         return to_tensor([self.dists[j].sample() for j in js.flatten()]).reshape(size)
 
 
-def annotate(dist_pred, dist_true):
-    return Annotation(
-        to_tensor(dist_pred.weights),
-        to_tensor([dist_pred.dists[0].mu, dist_pred.dists[1].mu]),
-        to_tensor([dist_pred.dists[0].sigma, dist_pred.dists[1].sigma]),
-        to_tensor(dist_true.weights),
-        to_tensor([dist_true.dists[0].mu, dist_true.dists[1].mu]),
-        to_tensor([dist_true.dists[0].sigma, dist_true.dists[1].sigma]))
-
-
 def generate_data(n_repeats, n_samples):
-    data = []
+    samples, annotations = [], []
     # unimodal
-    dist_true = Mixture([1, 0], [Normal(0, 1), Normal(0, 1)])
+    dist_true = Normal(0, 1)
     locs = [0, 0.1, 0.5, 1, 3, -0.1, -0.5, -1, -3, 0, 0, 0, 0, 0, 0, 0, 0]
     scales = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1.1, 1.5, 3, 9, 0.9, 0.75, 0.4, 0.1]
     for _ in range(n_repeats):
         for loc, scale in zip(locs, scales):
-            dist_pred = Mixture([1, 0], [Normal(loc, scale), Normal(0, 1)])
+            dist_pred = Normal(loc, scale)
             pit_values = pit(dist_pred, dist_true.sample(n_samples))
-            data.append((pit_values, annotate(dist_pred, dist_true)))
+            samples.append(pit_values)
+            annotations.append((dist_pred, dist_true))
     # multimodal
     for _ in range(n_repeats):
         for mu in [1, 2, 3]:
             dist_true = Mixture([0.5, 0.5], [Normal(-mu, 1), Normal(mu, 1)])
             for loc in [-3, -2, -1, 0, 1, 2, 3]:
                 for scale in [1, 2, 3]:
-                    dist_pred = Mixture([1, 0], [Normal(loc, scale), Normal(0, 1)])
+                    dist_pred = Normal(loc, scale)
                     pit_values = pit(dist_pred, dist_true.sample(n_samples))
-                    data.append((pit_values, annotate(dist_pred, dist_true)))
-    return data
+                    samples.append(pit_values)
+                    annotations.append((dist_pred, dist_true))
+    return samples, annotations
 
 
-def bin_data(data, n_bins):
-    return [(torch.histc(pit_values, bins=n_bins, min=0, max=1) / len(pit_values), a)
-            for pit_values, a in data]
+def bin_data(pit_values, n_bins):
+    return [torch.histc(p, bins=n_bins, min=0, max=1) / len(p) for p in pit_values]
 
 
-class PITDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
+class PITValuesDataset(Dataset):
+    def __init__(self, pit_values, annotations):
+        self.X, self.y = torch.stack(pit_values), annotations
 
     def __len__(self):
-        return len(self.data)
-
-
-class PITValuesDataset(PITDataset):
-    def __init__(self, data):
-        super().__init__(data)
+        return len(self.y)
 
     def __getitem__(self, i):
-        X, y = self.data[i]
-        return i, X, y
+        return i, self.X[i]
 
 
-class PITHistDataset(PITDataset):
-    def __init__(self, data):
-        super().__init__(data)
+class PITHistDataset(Dataset):
+    def __init__(self, pit_values, annotations, n_bins):
+        self.X, self.y = torch.stack(bin_data(pit_values, n_bins)), annotations
+
+    def __len__(self):
+        return len(self.y)
 
     def __getitem__(self, i):
-        X, y = self.data[i]
-        return X, X, y
+        return self.X[i], self.X[i]
 
 
 @torch.no_grad()
 def test(model, data_set):
     data_loader = DataLoader(data_set, batch_size=BS_TEST)
-    output = [(model(x.to(DEVICE)), y.to(DEVICE)) for x, y, _ in data_loader]
-    X_pred, X = tuple(zip(*output))
-    X_pred, X = torch.concat(X_pred), torch.concat(X)
-    return model.loss(X_pred, X).item()
+    X_pred = torch.concat([model(x.to(DEVICE)).cpu() for x, _ in data_loader])
+    return model.loss(X_pred, data_set.X).item()
+
+
+@torch.no_grad()
+def accuracy(train_embeds, y_train, test_embeds, y_test):
+    knn = NearestNeighbors(n_neighbors=1).fit(train_embeds)
+    js = knn.kneighbors(test_embeds, return_distance=False)
+    n = len(y_test)
+    return sum([y_test[i] == y_train[j[0]] for i, j in zip(range(n), js)]) / n
 
 
 def train(model, train_loader, optimiser):
-    for x, y, _ in train_loader:
+    for x, y in train_loader:
         optimiser.zero_grad()
         model.loss(model(x.to(DEVICE)), y.to(DEVICE)).backward()
         optimiser.step()
@@ -169,14 +168,14 @@ def wasserstein(u_values, v_values):
 
 
 class EmbedderDecoder(nn.Module):
-    def __init__(self, n_data, embed_dim, hiddens, output_dim):
+    def __init__(self, n_data, embed_dim, n_hiddens, output_dim):
         super().__init__()
         self.embed_dim = embed_dim
         self.embedder = nn.Embedding(n_data, embed_dim).to(DEVICE)
         self.decoder = nn.Sequential(
-            nn.Linear(embed_dim, hiddens),
+            nn.Linear(embed_dim, n_hiddens),
             nn.Tanh(),
-            nn.Linear(hiddens, output_dim),
+            nn.Linear(n_hiddens, output_dim),
             nn.Sigmoid()).to(DEVICE)
         self.loss = lambda X_pred, X: wasserstein(X_pred, X).mean()
 
@@ -185,11 +184,11 @@ class EmbedderDecoder(nn.Module):
 
     @torch.no_grad()
     def embed(self, i):
-        return self.embedder(i).cpu()
+        return self.embedder(i.to(DEVICE)).cpu()
 
     @torch.no_grad()
     def decode(self, x):
-        return self.decoder(x).cpu()
+        return self.decoder(x.to(DEVICE)).cpu()
 
     def new_data_set(self, data_set, hyperparams):
         model = deepcopy(self)
@@ -206,7 +205,8 @@ class EmbedderDecoder(nn.Module):
         i = 0
         while i < hyperparams["patience"]:
             train(self, train_loader, optimiser)
-            loss_train = test(self, train_set)
+            X_train_pred = self.decode(self.embed(torch.arange(len(train_set))))
+            loss_train = self.loss(X_train_pred, train_set.X).item()
             if loss_train < loss_best:
                 i = 0
                 loss_best = loss_train
@@ -220,26 +220,34 @@ class EmbedderDecoder(nn.Module):
         train_loader = DataLoader(train_set, batch_size=hyperparams["bs"], shuffle=True)
         for epoch in range(1, hyperparams["epochs"] + 1):
             train(self, train_loader, optimiser)
+            train_embeds = self.embed(torch.arange(len(train_set)))
+            X_train_pred = self.decode(train_embeds)
             test_model = self.new_data_set(test_set, hyperparams)
-            wandb.log({"train": test(self, train_set), "test": test(test_model, test_set)})
+            test_embeds = test_model.embed(torch.arange(len(test_set)))
+            X_test_pred = test_model.decode(test_embeds)
+            wandb.log({
+                "train": {"wasserstein": self.loss(X_train_pred, train_set.X).item()},
+                "test": {
+                    "wasserstein": self.loss(X_test_pred, test_set.X).item(),
+                    "accuracy": accuracy(train_embeds, train_set.y, test_embeds, test_set.y)}})
 
 
 def bhattacharyya(p_hist, q_hist):
-    # TODO bug in pytorch?
+    # TODO bug in pytorch? zeros in q_hist produces nans in gradients
     return -(p_hist * (q_hist + 1e-6)).sqrt().sum(1, keepdim=True).log()
 
 
 class EncoderDecoder(nn.Module):
-    def __init__(self, input_dim, hiddens, embed_dim):
+    def __init__(self, input_dim, n_hiddens, embed_dim):
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, hiddens),
+            nn.Linear(input_dim, n_hiddens),
             nn.Tanh(),
-            nn.Linear(hiddens, embed_dim)).to(DEVICE)
+            nn.Linear(n_hiddens, embed_dim)).to(DEVICE)
         self.decoder = nn.Sequential(
-            nn.Linear(embed_dim, hiddens),
+            nn.Linear(embed_dim, n_hiddens),
             nn.Tanh(),
-            nn.Linear(hiddens, input_dim),
+            nn.Linear(n_hiddens, input_dim),
             nn.Softmax(dim=1)).to(DEVICE)
         self.loss = lambda X_pred, X: bhattacharyya(X_pred, X).mean()
 
@@ -247,19 +255,31 @@ class EncoderDecoder(nn.Module):
         return self.decoder(self.encoder(x))
 
     @torch.no_grad()
-    def encode(self, x):
-        return self.encoder(x).cpu()
+    def embed(self, x):
+        return self.encoder(x.to(DEVICE)).cpu()
 
     @torch.no_grad()
     def decode(self, x):
-        return self.decoder(x).cpu()
+        return self.decoder(x.to(DEVICE)).cpu()
 
     def train_epochs(self, train_set, test_set, hyperparams):
         optimiser = Adam(self.parameters(), lr=hyperparams["lr"])
         train_loader = DataLoader(train_set, batch_size=hyperparams["bs"], shuffle=True)
         for epoch in range(1, hyperparams["epochs"] + 1):
             train(self, train_loader, optimiser)
-            wandb.log({"train": test(self, train_set), "test": test(self, test_set)})
+            train_embeds, test_embeds = self.embed(train_set.X), self.embed(test_set.X)
+            X_train_pred, X_test_pred = self.decode(train_embeds), self.decode(test_embeds)
+            wandb.log({
+                "train": {"bhattacharyya": self.loss(X_train_pred, train_set.X).item()},
+                "test": {
+                    "bhattacharyya": self.loss(X_test_pred, test_set.X).item(),
+                    "accuracy": accuracy(train_embeds, train_set.y, test_embeds, test_set.y)}})
+
+
+def seed():
+    np.random.seed(18)
+    torch.manual_seed(16)
+    torch.backends.cudnn.benchmark = False
 
 
 @click.command()
@@ -274,24 +294,21 @@ class EncoderDecoder(nn.Module):
 @click.option("--repeats", default=10)
 @click.option("--samples", default=1000)
 def experiment(**hyperparams):
-    # reproducibility
-    np.random.seed(18)
-    torch.manual_seed(16)
-    torch.backends.cudnn.benchmark = False
     with wandb.init(config=hyperparams) as run:
         config = wandb.config
+        # reproducibility
+        seed()
         # data
-        data = generate_data(hyperparams["repeats"], hyperparams["samples"])
-        train_data, test_data = train_test_split(data, test_size=0.2, random_state=86)
+        train_data = generate_data(hyperparams["repeats"], hyperparams["samples"])
+        test_data = generate_data(n_repeats=1, n_samples=hyperparams["samples"])
         if config["bins"] > 0:
-            train_data = bin_data(train_data, hyperparams["bins"])
-            test_data = bin_data(test_data, hyperparams["bins"])
-            train_set, test_set = PITHistDataset(train_data), PITHistDataset(test_data)
+            train_set = PITHistDataset(*train_data, config["bins"])
+            test_set = PITHistDataset(*test_data, config["bins"])
             model = EncoderDecoder(config["bins"], config["hiddens"], config["embed_dim"])
         else:
-            train_set, test_set = PITValuesDataset(train_data), PITValuesDataset(test_data)
-            model = EmbedderDecoder(
-                    len(train_set), config["embed_dim"], config["hiddens"], config["output_dim"])
+            train_set = PITValuesDataset(*train_data)
+            test_set = PITValuesDataset(*test_data)
+            model = EmbedderDecoder(len(train_set), config["embed_dim"], config["hiddens"], config["output_dim"])
         # train
         model.train_epochs(train_set, test_set, config)
         torch.save(model.state_dict(), MODELPATH.format(run.name))
