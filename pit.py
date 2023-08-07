@@ -8,13 +8,16 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.optim import Adam
+from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader, Dataset
 import wandb
 
 
+BINS = 10
 BS_TEST = 2048    # batch size for testing
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODELPATH = "models/{}.pt"
+SAMPLES = 1000
 
 
 def to_tensor(x):
@@ -82,16 +85,15 @@ def generate_data(n_repeats, n_samples):
     locs = [0, 0.1, 0.5, 1, 3, -0.1, -0.5, -1, -3, 0, 0, 0, 0, 0, 0, 0, 0]
     scales = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1.1, 1.5, 3, 9, 0.9, 0.75, 0.4, 0.1]
     for repeat in range(n_repeats):
-        # TODO refactor
-        if n_repeats > 1:
-            n_samples = int(100 ** (1 + repeat / (n_repeats - 1)))
+        # TODO refactor n_samples
+        if n_repeats > 1: n_samples = int(100 ** (1 + repeat / (n_repeats - 1)))
         # unimodal
         dist_true = Normal(0, 1)
         for loc, scale in zip(locs, scales):
             dist_pred = Normal(loc, scale)
             pit_values = pit(dist_pred, dist_true.sample(n_samples))
             samples.append(pit_values)
-            annotations.append((n_samples, dist_pred, dist_true))
+            annotations.append((dist_pred, dist_true, n_samples))
         # multimodal
         for mu in [1, 2, 3]:
             dist_true = Mixture([0.5, 0.5], [Normal(-mu, 1), Normal(mu, 1)])
@@ -100,23 +102,12 @@ def generate_data(n_repeats, n_samples):
                     dist_pred = Normal(loc, scale)
                     pit_values = pit(dist_pred, dist_true.sample(n_samples))
                     samples.append(pit_values)
-                    annotations.append((n_samples, dist_pred, dist_true))
+                    annotations.append((dist_pred, dist_true, n_samples))
     return samples, annotations
 
 
 def bin_data(pit_values, n_bins):
     return [torch.histc(p, bins=n_bins, min=0, max=1) / len(p) for p in pit_values]
-
-
-class PITValuesDataset(Dataset):
-    def __init__(self, pit_values, annotations):
-        self.X, self.y = torch.stack(pit_values), annotations
-
-    def __len__(self):
-        return len(self.y)
-
-    def __getitem__(self, i):
-        return i, self.X[i]
 
 
 class PITHistDataset(Dataset):
@@ -130,109 +121,37 @@ class PITHistDataset(Dataset):
         return self.X[i], self.X[i]
 
 
-@torch.no_grad()
-def test(model, data_set):
-    data_loader = DataLoader(data_set, batch_size=BS_TEST)
-    X_pred = torch.concat([model(x.to(DEVICE)).cpu() for x, _ in data_loader])
-    return model.loss(X_pred, data_set.X).item()
+def get_datasets(n_repeats, n_samples, n_bins):
+    data_train = generate_data(n_repeats, n_samples)
+    data_test = generate_data(1, n_samples)
+    trainset = PITHistDataset(*data_train, n_bins)
+    testset = PITHistDataset(*data_test, n_bins)
+    return trainset, testset
 
 
 @torch.no_grad()
-def accuracy(embeds_train, y_train, embeds_test, y_test):
-    knn = NearestNeighbors(n_neighbors=1).fit(embeds_train)
-    js = knn.kneighbors(embeds_test, return_distance=False)
+def accuracy(z_train, y_train, z_test, y_test):
+    knn = NearestNeighbors(n_neighbors=1).fit(z_train)
+    js = knn.kneighbors(z_test, return_distance=False)
     n = len(y_test)
     return sum([y_test[i] == y_train[j[0]] for i, j in zip(range(n), js)]) / n
 
 
-def train(model, train_loader, optimiser):
-    for x, y in train_loader:
+def train(model, loader, optimiser):
+    for x, y in loader:
         optimiser.zero_grad()
         model.loss(model(x.to(DEVICE)), y.to(DEVICE)).mean().backward()
         optimiser.step()
 
 
-def wasserstein(u_values, v_values):
-    u_sorter = torch.argsort(u_values)
-    v_sorter = torch.argsort(v_values)
-    all_values = torch.cat((u_values, v_values), dim=1)
-    all_values, _ = torch.sort(all_values, stable=True)
-    # compute the differences between pairs of successive values of u and v
-    deltas = torch.diff(all_values)
-    # get the respective positions of the values of u and v among the values of both distributions
-    batch_idx = torch.arange(u_values.size(0)).reshape(-1, 1)
-    u_cdf_indices = torch.searchsorted(u_values[batch_idx, u_sorter], all_values[:, :-1], side='right')
-    v_cdf_indices = torch.searchsorted(v_values[batch_idx, v_sorter], all_values[:, :-1], side='right')
-    # calculate the CDFs of u and v using their weights, if specified
-    u_cdf = u_cdf_indices / u_values.size(1)
-    v_cdf = v_cdf_indices / v_values.size(1)
-    # compute the value of the integral based on the CDFs
-    return torch.sum(torch.multiply(torch.abs(u_cdf - v_cdf), deltas), dim=1, keepdim=True)
-
-
-class EmbedderDecoder(nn.Module):
-    def __init__(self, n_data, embed_dim, n_hiddens, output_dim):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.embedder = nn.Embedding(n_data, embed_dim).to(DEVICE)
-        self.decoder = nn.Sequential(
-            nn.Linear(embed_dim, n_hiddens),
-            nn.Tanh(),
-            nn.Linear(n_hiddens, output_dim),
-            nn.Sigmoid()).to(DEVICE)
-        self.loss = lambda X_pred, X: wasserstein(X_pred, X)
-
-    def forward(self, i):
-        return self.decoder(self.embedder(i))
-
-    @torch.no_grad()
-    def embed(self, i):
-        return self.embedder(i.to(DEVICE)).cpu()
-
-    @torch.no_grad()
-    def decode(self, x):
-        return self.decoder(x.to(DEVICE)).cpu()
-
-    def new_data_set(self, data_set, hyperparams):
-        model = deepcopy(self)
-        model.embedder = nn.Embedding(len(data_set), model.embed_dim).to(DEVICE)
-        for p in model.decoder.parameters():
-            p.requires_grad = False
-        model.train_early_stopping(data_set, hyperparams)
-        return model
-
-    def train_early_stopping(self, train_set, hyperparams):
-        optimiser = Adam(self.parameters(), lr=hyperparams["lr"])
-        train_loader = DataLoader(train_set, batch_size=hyperparams["bs"], shuffle=True)
-        loss_best = float("inf")
-        i = 0
-        while i < hyperparams["patience"]:
-            train(self, train_loader, optimiser)
-            X_train_pred = self.decode(self.embed(torch.arange(len(train_set))))
-            loss_train = self.loss(X_train_pred, train_set.X).mean().item()
-            if loss_train < loss_best:
-                i = 0
-                loss_best = loss_train
-                model_state_dict_at_best = deepcopy(self.state_dict())
-            else:
-                i += 1
-        self.load_state_dict(model_state_dict_at_best)
-
-    def train_epochs(self, train_set, test_set, hyperparams):
-        optimiser = Adam(self.parameters(), lr=hyperparams["lr"])
-        train_loader = DataLoader(train_set, batch_size=hyperparams["bs"], shuffle=True)
-        for epoch in range(1, hyperparams["epochs"] + 1):
-            train(self, train_loader, optimiser)
-            embeds_train = self.embed(torch.arange(len(train_set)))
-            X_train_pred = self.decode(embeds_train)
-            test_model = self.new_data_set(test_set, hyperparams)
-            embeds_test = test_model.embed(torch.arange(len(test_set)))
-            X_test_pred = test_model.decode(embeds_test)
-            wandb.log({
-                "train": {"wasserstein": self.loss(X_train_pred, train_set.X).mean().item()},
-                "test": {
-                    "wasserstein": self.loss(X_test_pred, test_set.X).mean().item(),
-                    "accuracy": accuracy(embeds_train, train_set.y, embeds_test, test_set.y)}})
+def train_epochs(model, trainset, testset, hyperparams):
+    optimiser = Adam(model.parameters(), lr=hyperparams["lr"])
+    scheduler = StepLR(optimiser, step_size=hyperparams["step"], gamma=hyperparams["gamma"])
+    loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
+    for epoch in range(1, hyperparams["epochs"] + 1):
+        train(model, loader, optimiser)
+        wandb.log(model.test(trainset, testset))
+        scheduler.step()
 
 
 def bhattacharyya(p_hist, q_hist):
@@ -241,18 +160,18 @@ def bhattacharyya(p_hist, q_hist):
 
 
 def square_error(X_pred, X):
-    # TODO mean instead of sum
-    return (X_pred - X).square().sum(1, keepdim=True)
+    return (X_pred - X).square().mean(1, keepdim=True)
 
-def kl_divergence(mus, sigmas):
-    # with N(0, 1)
-    return (sigmas ** 2 + mus ** 2 - sigmas.log() - 0.5).sum(1, keepdim=True)
+
+def kl_divergence(mu, sigma):
+    return 0.5 * (sigma.square() + mu.square() - 2 * sigma.log() - 1).sum(1, keepdim=True)
+
 
 class Decoder(nn.Module):
-    def __init__(self, embed_dim, n_hiddens, output_dim):
+    def __init__(self, n_hiddens, output_dim):
         super().__init__()
         self.decoder = nn.Sequential(
-            nn.Linear(embed_dim, n_hiddens),
+            nn.Linear(2, n_hiddens),
             nn.Tanh(),
             nn.Linear(n_hiddens, n_hiddens),
             nn.Tanh(),
@@ -268,16 +187,18 @@ class Decoder(nn.Module):
 
 
 class AE(nn.Module):
-    def __init__(self, input_dim, n_hiddens, embed_dim):
+    def __init__(self, input_dim, n_hiddens):
         super().__init__()
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, n_hiddens),
             nn.Tanh(),
-            nn.Linear(n_hiddens, embed_dim)).to(DEVICE)
-        self.decoder = Decoder(embed_dim, n_hiddens, input_dim)
+            nn.Linear(input_dim, n_hiddens),
+            nn.Tanh(),
+            nn.Linear(n_hiddens, 2)).to(DEVICE)
+        self.decoder = Decoder(n_hiddens, input_dim)
 
     def loss(self, X_pred, X):
-        return bhattacharyya(X_pred, X)
+        return square_error(X_pred, X)
 
     def forward(self, x):
         return self.decoder(self.encoder(x))
@@ -286,18 +207,15 @@ class AE(nn.Module):
     def embed(self, x):
         return self.encoder(x.to(DEVICE)).cpu()
 
-    def train_epochs(self, train_set, test_set, hyperparams):
-        optimiser = Adam(self.parameters(), lr=hyperparams["lr"])
-        train_loader = DataLoader(train_set, batch_size=hyperparams["bs"], shuffle=True)
-        for epoch in range(1, hyperparams["epochs"] + 1):
-            train(self, train_loader, optimiser)
-            embeds_train, embeds_test = self.embed(train_set.X), self.embed(test_set.X)
-            X_train_pred, X_test_pred = self.decoder.decode(embeds_train), self.decoder.decode(embeds_test)
-            wandb.log({
-                "train": {"loss": self.loss(X_train_pred, train_set.X).mean().item()},
+    def test(self, trainset, testset):
+        z_train, z_test = self.embed(trainset.X), self.embed(testset.X)
+        X_pred_train, X_pred_test = self.decoder.decode(z_train), self.decoder.decode(z_test)
+        return {
+                "train": {
+                    "loss": self.loss(X_pred_train, trainset.X).mean().item()},
                 "test": {
-                    "loss": self.loss(X_test_pred, test_set.X).mean().item(),
-                    "accuracy": accuracy(embeds_train, train_set.y, embeds_test, test_set.y)}})
+                    "loss": self.loss(X_pred_test, testset.X).mean().item(),
+                    "accuracy": accuracy(z_train, trainset.y, z_test, testset.y)}}
 
 
 class VAE(nn.Module):
@@ -309,7 +227,7 @@ class VAE(nn.Module):
             nn.Linear(n_hiddens, n_hiddens),
             nn.Tanh(),
             nn.Linear(n_hiddens, 3)).to(DEVICE)
-        self.decoder = Decoder(2, n_hiddens, input_dim)
+        self.decoder = Decoder(n_hiddens, input_dim)
         self.epsilon = epsilon
         self.loss_rec = square_error
 
@@ -317,39 +235,37 @@ class VAE(nn.Module):
         return x[:, :2], torch.exp(x[:, 2:])
 
     def forward(self, x):
-        mus, sigmas = self.activation(self.encoder(x))
-        zs = mus + sigmas * torch.randn_like(mus)
-        return self.decoder(zs), mus, sigmas
+        mu, sigma = self.activation(self.encoder(x))
+        z = mu + sigma * torch.randn_like(mu)
+        uni_pred = self.decoder(self.activation(self.encoder(torch.full((1, 10), 0.1, device=DEVICE)))[0])
+        return self.decoder(z), uni_pred, mu, sigma
 
     @torch.no_grad()
     def embed(self, x):
         return self.activation(self.encoder(x.to(DEVICE)).cpu())
 
     def loss(self, X_pred, X):
-        X_pred, mus, sigmas = X_pred
-        return self.loss_rec(X_pred, X) + self.epsilon * kl_divergence(mus, sigmas)
+        X_pred, uni_pred, mu, sigma = X_pred
+        return self.loss_rec(X_pred, X) + self.loss_rec(torch.full((1, 10), 0.1, device=DEVICE), uni_pred) + self.epsilon * kl_divergence(mu, sigma)
 
-    def train_epochs(self, train_set, test_set, hyperparams):
-        optimiser = Adam(self.parameters(), lr=hyperparams["lr"])
-        train_loader = DataLoader(train_set, batch_size=hyperparams["bs"], shuffle=True)
-        for epoch in range(1, hyperparams["epochs"] + 1):
-            train(self, train_loader, optimiser)
-            mus_train, sigmas_train = self.embed(train_set.X)
-            mus_test, sigmas_test = self.embed(test_set.X)
-            embeds_train = mus_train + sigmas_train * torch.randn_like(mus_train)
-            embeds_test = mus_test + sigmas_test * torch.randn_like(mus_test)
-            X_train_pred = self.decoder.decode(embeds_train)
-            X_test_pred = self.decoder.decode(embeds_test)
-            wandb.log({
+    def test(self, trainset, testset):
+        mu_train, sigma_train = self.embed(trainset.X)
+        mu_test, sigma_test = self.embed(testset.X)
+        z_train = mu_train + sigma_train * torch.randn_like(mu_train)
+        z_test = mu_test + sigma_test * torch.randn_like(mu_test)
+        X_pred_train = self.decoder.decode(z_train)
+        X_pred_test = self.decoder.decode(z_test)
+        return {
                 "train": {
-                    "loss": self.loss((X_train_pred, mus_train, sigmas_train), train_set.X).mean().item(),
-                    "reconstruction": self.loss_rec(X_train_pred, train_set.X).mean().item(),
-                    "kl_divergence": kl_divergence(mus_train, sigmas_train).mean().item()},
+                    #"loss": self.loss((X_pred_train, mu_train, sigma_train), trainset.X).mean().item(),
+                    "reconstruction": self.loss_rec(X_pred_train, trainset.X).mean().item(),
+                    "kl_divergence": kl_divergence(mu_train, sigma_train).mean().item()},
                 "test": {
-                    "loss": self.loss((X_test_pred, mus_test, sigmas_test), test_set.X).mean().item(),
-                    "reconstruction": self.loss_rec(X_test_pred, test_set.X).mean().item(),
-                    "kl_divergence": kl_divergence(mus_test, sigmas_test).mean().item(),
-                    "accuracy": accuracy(embeds_train, train_set.y, embeds_test, test_set.y)}})
+                    #"loss": self.loss((X_pred_test, mu_test, sigma_test), testset.X).mean().item(),
+                    "reconstruction": self.loss_rec(X_pred_test, testset.X).mean().item(),
+                    "kl_divergence": kl_divergence(mu_test, sigma_test).mean().item(),
+                    # TODO use probabilistic distance
+                    "accuracy": accuracy(z_train, trainset.y, z_test, testset.y)}}
 
 
 def seed():
@@ -361,61 +277,44 @@ def seed():
 @click.group()
 @click.option("--bs", default=32)
 @click.option("--epochs", default=1000)
-@click.option("--lr", default=1e-1)
+@click.option("--gamma", default=1.0)
+@click.option("--lr", default=1e-3)
 @click.option("--patience", default=10)
 @click.option("--repeats", default=10)
-@click.option("--samples", default=1000)
+@click.option("--samples", default=SAMPLES)
+@click.option("--step", default=1000)
 @click.pass_context
 def experiment(context, **hyperparams):
     seed()   # reproducibility
     context.obj = hyperparams
-    # code for embedder
-    #train_set = PITValuesDataset(*train_data)
-    #test_set = PITValuesDataset(*test_data)
-    #model = EmbedderDecoder(len(train_set), config["embed_dim"], config["hiddens"], config["output_dim"])
 
 
 @experiment.command()
-@click.option("--bins", default=10)
-@click.option("--embed_dim", default=2)
+@click.option("--bins", default=BINS)
 @click.option("--hiddens", default=8)
 @click.pass_context
 def ae(context, **hyperparams):
     hyperparams |= context.obj
     with wandb.init(config=hyperparams) as run:
         config = wandb.config
-        # data
-        train_data = generate_data(config["repeats"], config["samples"])
-        test_data = generate_data(n_repeats=1, n_samples=config["samples"])
-        train_set = PITHistDataset(*train_data, config["bins"])
-        test_set = PITHistDataset(*test_data, config["bins"])
-        # model
-        model = AE(config["bins"], config["hiddens"], config["embed_dim"])
-        # train
-        model.train_epochs(train_set, test_set, config)
-        # save
+        trainset, testset = get_datasets(config["repeats"], config["samples"], config["bins"])
+        model = AE(config["bins"], config["hiddens"])
+        train_epochs(model, trainset, testset, config)
         torch.save(model.state_dict(), MODELPATH.format(run.name))
 
 
 @experiment.command()
-@click.option("--bins", default=10)
+@click.option("--bins", default=BINS)
+@click.option("--epsilon", default=1e-3)
 @click.option("--hiddens", default=8)
-@click.option("--epsilon", default=0.01)
 @click.pass_context
 def vae(context, **hyperparams):
     hyperparams |= context.obj
     with wandb.init(config=hyperparams) as run:
         config = wandb.config
-        # data
-        train_data = generate_data(config["repeats"], config["samples"])
-        test_data = generate_data(n_repeats=1, n_samples=config["samples"])
-        train_set = PITHistDataset(*train_data, config["bins"])
-        test_set = PITHistDataset(*test_data, config["bins"])
-        # model
+        trainset, testset = get_datasets(config["repeats"], config["samples"], config["bins"])
         model = VAE(config["bins"], config["hiddens"], config["epsilon"])
-        # train
-        model.train_epochs(train_set, test_set, config)
-        # save
+        train_epochs(model, trainset, testset, config)
         torch.save(model.state_dict(), MODELPATH.format(run.name))
 
 
