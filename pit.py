@@ -186,38 +186,6 @@ class Decoder(nn.Module):
         return self.decoder(x.to(DEVICE)).cpu()
 
 
-class AE(nn.Module):
-    def __init__(self, input_dim, n_hiddens):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, n_hiddens),
-            nn.Tanh(),
-            nn.Linear(input_dim, n_hiddens),
-            nn.Tanh(),
-            nn.Linear(n_hiddens, 2)).to(DEVICE)
-        self.decoder = Decoder(n_hiddens, input_dim)
-
-    def loss(self, X_pred, X):
-        return square_error(X_pred, X)
-
-    def forward(self, x):
-        return self.decoder(self.encoder(x))
-
-    @torch.no_grad()
-    def embed(self, x):
-        return self.encoder(x.to(DEVICE)).cpu()
-
-    def test(self, trainset, testset):
-        z_train, z_test = self.embed(trainset.X), self.embed(testset.X)
-        X_pred_train, X_pred_test = self.decoder.decode(z_train), self.decoder.decode(z_test)
-        return {
-                "train": {
-                    "loss": self.loss(X_pred_train, trainset.X).mean().item()},
-                "test": {
-                    "loss": self.loss(X_pred_test, testset.X).mean().item(),
-                    "accuracy": accuracy(z_train, trainset.y, z_test, testset.y)}}
-
-
 class VAE(nn.Module):
     def __init__(self, input_dim, n_hiddens, epsilon):
         super().__init__()
@@ -287,20 +255,6 @@ def seed():
 def experiment(context, **hyperparams):
     seed()   # reproducibility
     context.obj = hyperparams
-
-
-@experiment.command()
-@click.option("--bins", default=BINS)
-@click.option("--hiddens", default=8)
-@click.pass_context
-def ae(context, **hyperparams):
-    hyperparams |= context.obj
-    with wandb.init(config=hyperparams) as run:
-        config = wandb.config
-        trainset, testset = get_datasets(config["repeats"], config["samples"], config["bins"])
-        model = AE(config["bins"], config["hiddens"])
-        train_epochs(model, trainset, testset, config)
-        torch.save(model.state_dict(), MODELPATH.format(run.name))
 
 
 @experiment.command()
