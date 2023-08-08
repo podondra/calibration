@@ -42,7 +42,7 @@ class Normal(Distribution):
         return self.mu == other.mu and self.sigma == other.sigma
 
     def __repr__(self):
-        return f"Normal({self.mu}, {self.sigma})"
+        return f"Normal({self.mu:.1f}, {self.sigma:.1f})"
 
     def pdf(self, x):
         return ((1.0 / (self.sigma * torch.sqrt(2.0 * torch.tensor(math.pi))))
@@ -81,28 +81,50 @@ class Mixture(Distribution):
 
 
 def generate_data(n_repeats, n_samples):
-    samples, annotations = [], []
-    locs = [0, 0.1, 0.5, 1, 3, -0.1, -0.5, -1, -3, 0, 0, 0, 0, 0, 0, 0, 0]
-    scales = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1.1, 1.5, 3, 9, 0.9, 0.75, 0.4, 0.1]
-    for repeat in range(n_repeats):
-        # TODO refactor n_samples
-        if n_repeats > 1: n_samples = int(100 ** (1 + repeat / (n_repeats - 1)))
-        # unimodal
-        dist_true = Normal(0, 1)
-        for loc, scale in zip(locs, scales):
-            dist_pred = Normal(loc, scale)
-            pit_values = pit(dist_pred, dist_true.sample(n_samples))
-            samples.append(pit_values)
-            annotations.append((dist_pred, dist_true, n_samples))
-        # multimodal
-        for mu in [1, 2, 3]:
-            dist_true = Mixture([0.5, 0.5], [Normal(-mu, 1), Normal(mu, 1)])
-            for loc in [-3, -2, -1, 0, 1, 2, 3]:
-                for scale in [1, 2, 3]:
-                    dist_pred = Normal(loc, scale)
-                    pit_values = pit(dist_pred, dist_true.sample(n_samples))
-                    samples.append(pit_values)
-                    annotations.append((dist_pred, dist_true, n_samples))
+    # TODO use n_repeats
+    # TODO dynamic n_samples
+    pit_values, annotations = [], []
+    # under- and overestimation
+    # equidistant
+    location = torch.linspace(-2, 2, steps=5)
+    # under- and overdispersion
+    # logarithmic
+    scale = torch.exp(torch.linspace(math.log(1 / 3), math.log(3), steps=5))
+    # uni- and multimodal
+    x = torch.tensor([0.1, 0.25, 0.5, 0.75, 1])
+    separation = 2 * (1 - x ** 2)
+    for b in location:
+        for s in scale:
+            for d in separation:
+                dist_pred = Normal(b, s)
+                sigma = 1 - d ** 2 / 4
+                dist_true = Mixture([0.5, 0.5], [Normal(-d / 2, sigma), Normal(d / 2, sigma)])
+                pit_values.append(pit(dist_pred, dist_true.sample(n_samples)))
+                annotations.append((dist_pred, dist_true, n_samples))
+    return pit_values, annotations
+    # old dataset
+    #samples, annotations = [], []
+    #locs = [0, 0.1, 0.5, 1, 3, -0.1, -0.5, -1, -3, 0, 0, 0, 0, 0, 0, 0, 0]
+    #scales = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1.1, 1.5, 3, 9, 0.9, 0.75, 0.4, 0.1]
+    #for repeat in range(n_repeats):
+    #    # TODO refactor n_samples
+    #    if n_repeats > 1: n_samples = int(100 ** (1 + repeat / (n_repeats - 1)))
+    #    # unimodal
+    #    dist_true = Normal(0, 1)
+    #    for loc, scale in zip(locs, scales):
+    #        dist_pred = Normal(loc, scale)
+    #        pit_values = pit(dist_pred, dist_true.sample(n_samples))
+    #        samples.append(pit_values)
+    #        annotations.append((dist_pred, dist_true, n_samples))
+    #    # multimodal
+    #    for mu in [1, 2, 3]:
+    #        dist_true = Mixture([0.5, 0.5], [Normal(-mu, 1), Normal(mu, 1)])
+    #        for loc in [-3, -2, -1, 0, 1, 2, 3]:
+    #            for scale in [1, 2, 3]:
+    #                dist_pred = Normal(loc, scale)
+    #                pit_values = pit(dist_pred, dist_true.sample(n_samples))
+    #                samples.append(pit_values)
+    #                annotations.append((dist_pred, dist_true, n_samples))
     return samples, annotations
 
 
@@ -168,15 +190,13 @@ def kl_divergence(mu, sigma):
 
 
 class Decoder(nn.Module):
-    def __init__(self, n_hiddens, output_dim):
+    def __init__(self, n_hiddens, n_neurons, output_dim):
         super().__init__()
-        self.decoder = nn.Sequential(
-            nn.Linear(2, n_hiddens),
-            nn.Tanh(),
-            nn.Linear(n_hiddens, n_hiddens),
-            nn.Tanh(),
-            nn.Linear(n_hiddens, output_dim),
-            nn.Softmax(dim=1)).to(DEVICE)
+        layers = [nn.Linear(2, n_neurons), nn.Tanh()]
+        for _ in range(n_hiddens - 1):
+            layers += [nn.Linear(n_neurons, n_neurons), nn.Tanh()]
+        layers += [nn.Linear(n_neurons, output_dim), nn.Softmax(dim=1)]
+        self.decoder = nn.Sequential(*layers).to(DEVICE)
 
     def forward(self, x):
         return self.decoder(x)
@@ -187,15 +207,14 @@ class Decoder(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, input_dim, n_hiddens, epsilon):
+    def __init__(self, input_dim, n_hiddens, n_neurons, epsilon):
         super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, n_hiddens),
-            nn.Tanh(),
-            nn.Linear(n_hiddens, n_hiddens),
-            nn.Tanh(),
-            nn.Linear(n_hiddens, 3)).to(DEVICE)
-        self.decoder = Decoder(n_hiddens, input_dim)
+        layers = [nn.Linear(input_dim, n_neurons), nn.Tanh()]
+        for _ in range(n_hiddens - 1):
+            layers += [nn.Linear(n_neurons, n_neurons), nn.Tanh()]
+        layers += [nn.Linear(n_neurons, 3)]
+        self.encoder = nn.Sequential(*layers).to(DEVICE)
+        self.decoder = Decoder(n_hiddens, n_neurons, input_dim)
         self.epsilon = epsilon
         self.loss_rec = square_error
 
@@ -209,7 +228,7 @@ class VAE(nn.Module):
         return self.decoder(z), uni_pred, mu, sigma
 
     @torch.no_grad()
-    def embed(self, x):
+    def encode(self, x):
         return self.activation(self.encoder(x.to(DEVICE)).cpu())
 
     def loss(self, X_pred, X):
@@ -217,8 +236,8 @@ class VAE(nn.Module):
         return self.loss_rec(X_pred, X) + self.loss_rec(torch.full((1, 10), 0.1, device=DEVICE), uni_pred) + self.epsilon * kl_divergence(mu, sigma)
 
     def test(self, trainset, testset):
-        mu_train, sigma_train = self.embed(trainset.X)
-        mu_test, sigma_test = self.embed(testset.X)
+        mu_train, sigma_train = self.encode(trainset.X)
+        mu_test, sigma_test = self.encode(testset.X)
         z_train = mu_train + sigma_train * torch.randn_like(mu_train)
         z_test = mu_test + sigma_test * torch.randn_like(mu_test)
         X_pred_train = self.decoder.decode(z_train)
@@ -242,35 +261,29 @@ def seed():
     torch.backends.cudnn.benchmark = False
 
 
-@click.group()
+@click.command()
+# training hyperparams
 @click.option("--bs", default=32)
 @click.option("--epochs", default=1000)
 @click.option("--gamma", default=1.0)
 @click.option("--lr", default=1e-3)
-@click.option("--patience", default=10)
 @click.option("--repeats", default=10)
 @click.option("--samples", default=SAMPLES)
 @click.option("--step", default=1000)
-@click.pass_context
-def experiment(context, **hyperparams):
-    seed()   # reproducibility
-    context.obj = hyperparams
-
-
-@experiment.command()
+# vae hyperparams
 @click.option("--bins", default=BINS)
 @click.option("--epsilon", default=1e-3)
-@click.option("--hiddens", default=8)
-@click.pass_context
-def vae(context, **hyperparams):
-    hyperparams |= context.obj
+@click.option("--hiddens", default=1)
+@click.option("--neurons", default=8)
+def vae(**hyperparams):
+    seed()    # reproducibility
     with wandb.init(config=hyperparams) as run:
         config = wandb.config
         trainset, testset = get_datasets(config["repeats"], config["samples"], config["bins"])
-        model = VAE(config["bins"], config["hiddens"], config["epsilon"])
+        model = VAE(config["bins"], config["hiddens"], config["neurons"], config["epsilon"])
         train_epochs(model, trainset, testset, config)
         torch.save(model.state_dict(), MODELPATH.format(run.name))
 
 
 if __name__ == "__main__":
-    experiment(obj={})
+    vae()
