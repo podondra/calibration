@@ -71,8 +71,9 @@ class PITHistSampler(torch.utils.data.Dataset):
         x = 0.1 + torch.rand(torch.Size(), device=self.device) * 0.9
         d = 2 * (1 - x ** 2)
         sigma = 1 - d ** 2 / 4
-        weights = torch.tensor([0.5, 0.5], device=self.device)
-        mus = torch.tensor([-d / 2, d / 2], device=self.device)
+        weight = torch.rand(torch.Size(), device=self.device)
+        weights = torch.stack((weight, 1 - weight))
+        mus = torch.stack((-d / 2, d / 2))
         sample = dists.sample_normal_mixture(weights, mus, sigma,
                                              self.sample_size, self.device)
         dist_pred = dists.Normal(b, s)
