@@ -1,11 +1,10 @@
 from matplotlib import gridspec
 from matplotlib import pyplot
-import numpy
 import torch
 
 
 def pit_hist(ax, x, n_bins, **kwargs):
-    ax.stairs(x, numpy.linspace(0, 1, n_bins + 1), **kwargs)
+    ax.stairs(x, torch.linspace(0, 1, n_bins + 1), **kwargs)
 
 
 def get_grid():

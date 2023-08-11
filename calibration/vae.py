@@ -5,10 +5,12 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 import wandb
 
+
 def train_epochs(model, trainset, testset, hyperparams):
     optimiser = Adam(model.parameters(), lr=hyperparams["lr"])
-    scheduler = StepLR(optimiser, step_size=hyperparams["step"], gamma=hyperparams["gamma"])
-    loader = DataLoader(trainset, batch_size=hyperparams["bs"], num_workers=hyperparams["workers"])
+    scheduler = StepLR(optimiser, step_size=hyperparams["step"],
+                       gamma=hyperparams["gamma"])
+    loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
     for epoch in range(1, hyperparams["epochs"] + 1):
         log_train = model.train(loader, optimiser)
         log_test = model.test(testset)
@@ -16,46 +18,32 @@ def train_epochs(model, trainset, testset, hyperparams):
         scheduler.step()
 
 
-def bhattacharyya(p_hist, q_hist):
-    # TODO bug in pytorch? zeros in q_hist produces nans in gradients
-    return -(p_hist * (q_hist + 1e-6)).sqrt().sum(1).log()
-
-
-def mae(X_pred, X):
-    return (X_pred - X).abs().mean(1)
-
-
-def mse(X_pred, X):
-    return (X_pred - X).square().mean(1)
-
-
 def kl_divergence(mu, sigma):
-    return 0.5 * (sigma.square() + mu.square() - 2 * sigma.log() - 1).sum(1)
+    return 0.5 * (sigma.square() + mu.square() - 2 * sigma.log() - 1).sum(1, keepdim=True)
 
 
 class VAE(nn.Module):
-    def __init__(self, input_dim, n_hiddens, n_neurons, embed_dim, epsilon, device):
+    def __init__(self, input_dim, n_hiddens, n_neurons, embed_dim, epsilon):
         super().__init__()
         # hyperparams
         self.embed_dim = embed_dim
         self.epsilon = epsilon
-        self.loss_rec = mse    # TODO
-        self.device = device
+        self.loss_rec = nn.MSELoss(reduction="none")
         # encoder
         encoder = [nn.Linear(input_dim, n_neurons), nn.Tanh()]
         for _ in range(n_hiddens - 1):
             encoder += [nn.Linear(n_neurons, n_neurons), nn.Tanh()]
-        #encoder += [nn.Linear(n_neurons, embed_dim + 1)]
-        self.encoder = nn.Sequential(*encoder).to(device)
-        self.fc_mu = nn.Linear(n_neurons, embed_dim).to(device)
-        self.fc_sigma = nn.Sequential(nn.Linear(n_neurons, embed_dim), nn.Softplus()).to(device)
+        self.encoder = nn.Sequential(*encoder)
+        self.fc_mu = nn.Linear(n_neurons, embed_dim)
+        # TODO output log_var?
+        self.fc_sigma = nn.Sequential(nn.Linear(n_neurons, embed_dim), nn.Softplus())
         # decoder
         decoder = [nn.Linear(embed_dim, n_neurons), nn.Tanh()]
         for _ in range(n_hiddens - 1):
             decoder += [nn.Linear(n_neurons, n_neurons), nn.Tanh()]
         decoder += [nn.Linear(n_neurons, input_dim)]
-        #decoder += [nn.Softmax(dim=1)]    # TODO
-        self.decoder = nn.Sequential(*decoder).to(device)
+        # TODO decoder += [nn.Softmax(dim=1)]
+        self.decoder = nn.Sequential(*decoder)
 
     def forward(self, x):
         x = self.encoder(x)
@@ -65,17 +53,17 @@ class VAE(nn.Module):
 
     @torch.no_grad()
     def encode(self, x):
-        x = self.encoder(x.to(self.device))
-        return self.fc_mu(x).cpu(), self.fc_sigma(x).cpu()
+        x = self.encoder(x)
+        return self.fc_mu(x), self.fc_sigma(x)
 
     @torch.no_grad()
     def decode(self, x):
-        return self.decoder(x.to(self.device)).cpu()# TODO .softmax(dim=1)
+        return self.decoder(x)
 
     def train(self, loader, optimiser):
+        # TODO correct running loss log
         for x in loader:
             optimiser.zero_grad()
-            x = x.to(self.device)
             x_pred, mu, sigma = self(x)
             loss_rec = self.loss_rec(x_pred, x).mean()
             kl_div = kl_divergence(mu, sigma).mean()
@@ -88,8 +76,7 @@ class VAE(nn.Module):
 
     @torch.no_grad()
     def test(self, dataset):
-        X_pred, mu, sigma = self(dataset.X.to(self.device))
-        X_pred, mu, sigma = X_pred.cpu(), mu.cpu(), sigma.cpu()
+        X_pred, mu, sigma = self(dataset.X)
         loss_rec = self.loss_rec(X_pred, dataset.X).mean()
         kl_div = kl_divergence(mu, sigma).mean()
         loss = loss_rec + self.epsilon * kl_div

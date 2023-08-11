@@ -1,6 +1,5 @@
 import math
 
-import numpy
 import torch
 
 
@@ -16,20 +15,25 @@ class Normal(Distribution):
         return f"Normal({self.mu:.1f}, {self.sigma:.1f})"
 
     def pdf(self, x):
-        return ((1.0 / (self.sigma * torch.sqrt(2.0 * torch.tensor(math.pi))))
+        return ((1.0 / (self.sigma * math.sqrt(2.0 * math.pi)))
                 * torch.exp(-0.5 * ((x - self.mu) / self.sigma) ** 2))
 
     def cdf(self, x):
         return 0.5 + 0.5 * torch.erf((x - self.mu) / (self.sigma * math.sqrt(2.0)))
 
-    def sample(self, size=1):
-        size = size if type(size) is tuple else (size, )
-        return torch.normal(self.mu, self.sigma, size)
+    def sample(self, size, device):
+        return self.mu + self.sigma * torch.randn(size, device=device)
+
+
+def sample_normal_mixture(weights, mus, sigmas, size, device=None):
+    mus, sigmas = mus.unsqueeze(-1),  sigmas.unsqueeze(-1)
+    sample = mus + sigmas * torch.randn(2, size, device=device)
+    index = torch.multinomial(weights, num_samples=size, replacement=True)
+    return torch.gather(sample, 0, index.unsqueeze(0)).squeeze()
 
 
 class Mixture(Distribution):
     def __init__(self, weights, dists):
-        assert math.isclose(sum(weights), 1.0)
         self.weights, self.dists = weights, dists
 
     def __repr__(self):
@@ -40,8 +44,3 @@ class Mixture(Distribution):
 
     def cdf(self, x):
         return torch.stack([w * d.cdf(x) for w, d in zip(self.weights, self.dists)]).sum(0)
-
-    def sample(self, size):
-        js = numpy.random.choice(len(self.weights), p=self.weights, size=size)
-        sample = [self.dists[j].sample() for j in js.flatten()]
-        return torch.tensor(sample, dtype=torch.float32).reshape(size)
