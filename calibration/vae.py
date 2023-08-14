@@ -18,8 +18,8 @@ def train_epochs(model, trainset, testset, hyperparams):
         scheduler.step()
 
 
-def kl_divergence(mu, sigma):
-    return 0.5 * (sigma.square() + mu.square() - 2 * sigma.log() - 1).sum(1, keepdim=True)
+def kl_divergence(mu, ln_var):
+    return 0.5 * (ln_var.exp() + mu.square() - 1 -ln_var).sum(1, keepdim=True)
 
 
 class VAE(nn.Module):
@@ -35,8 +35,7 @@ class VAE(nn.Module):
             encoder += [nn.Linear(n_neurons, n_neurons), nn.Tanh()]
         self.encoder = nn.Sequential(*encoder)
         self.fc_mu = nn.Linear(n_neurons, embed_dim)
-        # TODO output log_var?
-        self.fc_sigma = nn.Sequential(nn.Linear(n_neurons, embed_dim), nn.Softplus())
+        self.fc_ln_var = nn.Linear(n_neurons, embed_dim)
         # decoder
         decoder = [nn.Linear(embed_dim, n_neurons), nn.Tanh()]
         for _ in range(n_hiddens - 1):
@@ -47,14 +46,14 @@ class VAE(nn.Module):
 
     def forward(self, x):
         x = self.encoder(x)
-        mu, sigma = self.fc_mu(x), self.fc_sigma(x)
-        z = mu + sigma * torch.randn_like(mu)
-        return self.decoder(z), mu, sigma
+        mu, ln_var = self.fc_mu(x), self.fc_ln_var(x)
+        z = mu + ln_var.exp().sqrt() * torch.randn_like(mu)
+        return self.decoder(z), mu, ln_var
 
     @torch.no_grad()
     def encode(self, x):
         x = self.encoder(x)
-        return self.fc_mu(x), self.fc_sigma(x)
+        return self.fc_mu(x), self.fc_ln_var(x).exp().sqrt()
 
     @torch.no_grad()
     def decode(self, x):
@@ -64,9 +63,9 @@ class VAE(nn.Module):
         # TODO correct running loss log
         for x in loader:
             optimiser.zero_grad()
-            x_pred, mu, sigma = self(x)
+            x_pred, mu, ln_var = self(x)
             loss_rec = self.loss_rec(x_pred, x).mean()
-            kl_div = kl_divergence(mu, sigma).mean()
+            kl_div = kl_divergence(mu, ln_var).mean()
             loss = (loss_rec + self.epsilon * kl_div)
             loss.backward()
             optimiser.step()
@@ -76,9 +75,9 @@ class VAE(nn.Module):
 
     @torch.no_grad()
     def test(self, dataset):
-        X_pred, mu, sigma = self(dataset.X)
+        X_pred, mu, ln_var = self(dataset.X)
         loss_rec = self.loss_rec(X_pred, dataset.X).mean()
-        kl_div = kl_divergence(mu, sigma).mean()
+        kl_div = kl_divergence(mu, ln_var).mean()
         loss = loss_rec + self.epsilon * kl_div
         return {"reconstruction": loss_rec.item(),
                 "kl_divergence": kl_div.item(),
