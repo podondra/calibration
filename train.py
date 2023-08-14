@@ -31,7 +31,9 @@ def train(**hyperparams):
         testset = data.PITHistDataset(config["samples"], config["bins"],
                                       config["device"])
         model = vae.VAE(config["bins"], config["hiddens"], config["neurons"],
-                        config["embed"], config["epsilon"]).to(device)
+                        config["embed"], config["epsilon"])
+        #model = vae.ConvVAE(config["bins"], config["embed"], config["epsilon"])
+        model = model.to(device)
         if config["modelfile"] is not None:
             checkpoint = torch.load(config["modelfile"], map_location=device)
             model.load_state_dict(checkpoint)
