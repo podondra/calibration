@@ -1,4 +1,5 @@
 import click
+from torchvision import datasets
 import torch
 import wandb
 
@@ -9,7 +10,7 @@ from calibration import vae
 
 @click.command()
 @click.option("--bins", default=10)
-@click.option("--bs", default=32)
+@click.option("--bs", default=64)
 @click.option("--device", default="cuda")
 @click.option("--embed", default=2)
 @click.option("--epochs", default=1000)
@@ -25,11 +26,13 @@ def train(**hyperparams):
     with wandb.init(config=hyperparams) as run:
         config = wandb.config
         device = torch.device(config["device"])
-        trainset = data.PITHistSampler(config["bs"], config["samples"],
-                                       config["bins"], config["device"])
+        # PIT histograms
+        #trainset = data.PITHistSampler(config["bs"], config["samples"], config["bins"], device])
         utils.seed()    # reproducibility
-        testset = data.PITHistDataset(config["samples"], config["bins"],
-                                      config["device"])
+        #testset = data.PITHistDataset(config["samples"], config["bins"], device)
+        # MNIST
+        trainset = data.MNISTDataset(datasets.MNIST(root="data", train=True), device)
+        testset = data.MNISTDataset(datasets.MNIST(root="data", train=False), device)
         model = vae.VAE(config["bins"], config["hiddens"], config["neurons"],
                         config["embed"], config["epsilon"])
         #model = vae.ConvVAE(config["bins"], config["embed"], config["epsilon"])

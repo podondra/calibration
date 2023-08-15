@@ -42,14 +42,14 @@ class PITHistDataset(torch.utils.data.Dataset):
                     dist_true = dists.Mixture(weights,
                                               [dists.Normal(mus[0], sigma),
                                                dists.Normal(mus[1], sigma)])
-                    self.y.append((dist_pred, dist_true, sample_size))
+                    self.y.append((b, s, d))
         self.X = self.X.to(device)
 
     def __len__(self):
         return self.n
 
     def __getitem__(self, i):
-        return self.X[i]
+        return self.X[i], self.y[i]
 
 
 class PITHistSampler(torch.utils.data.Dataset):
@@ -78,4 +78,16 @@ class PITHistSampler(torch.utils.data.Dataset):
                                              self.sample_size, self.device)
         dist_pred = dists.Normal(b, s)
         pit_values = pit(dist_pred, sample)
-        return pit_hist(pit_values, self.n_bins)
+        return pit_hist(pit_values, self.n_bins), (b, s, d, weight)
+
+
+class MNISTDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset, device):
+        self.X = dataset.data.to(device=device, dtype=torch.float).flatten(1) / 256
+        self.y = dataset.targets.to(device)
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, i):
+        return self.X[i], self.y[i]

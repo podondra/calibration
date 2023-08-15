@@ -51,7 +51,7 @@ class AbstractVAE(nn.Module):
 
     def train(self, loader, optimiser):
         # TODO correct running loss log
-        for x in loader:
+        for x, _ in loader:
             optimiser.zero_grad()
             x_pred, mu, ln_var = self(x)
             loss_rec = self.loss_rec(x_pred, x).mean()
@@ -90,6 +90,7 @@ class VAE(AbstractVAE):
             decoder += [nn.Linear(n_neurons, n_neurons), nn.Tanh()]
         decoder += [nn.Linear(n_neurons, input_dim)]
         # TODO decoder += [nn.Softmax(dim=1)]
+        decoder += [nn.Sigmoid()]
         self.decoder = nn.Sequential(*decoder)
 
 
