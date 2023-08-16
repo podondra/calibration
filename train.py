@@ -12,13 +12,12 @@ from calibration import vae
 @click.option("--bins", default=10)
 @click.option("--bs", default=64)
 @click.option("--device", default="cuda")
-@click.option("--embed", default=2)
+@click.option("--embeds", default=2)
 @click.option("--epochs", default=1000)
 @click.option("--epsilon", default=1e-3)
 @click.option("--gamma", default=1.0)
 @click.option("--hiddens", default=1)
 @click.option("--lr", default=1e-3)
-@click.option("--modelfile", type=click.Path(exists=True))
 @click.option("--neurons", default=8)
 @click.option("--samples", default=1000)
 @click.option("--step", default=1000)
@@ -26,20 +25,14 @@ def train(**hyperparams):
     with wandb.init(config=hyperparams) as run:
         config = wandb.config
         device = torch.device(config["device"])
-        # PIT histograms
-        #trainset = data.PITHistSampler(config["bs"], config["samples"], config["bins"], device])
         utils.seed()    # reproducibility
-        #testset = data.PITHistDataset(config["samples"], config["bins"], device)
-        # MNIST
-        trainset = data.MNISTDataset(datasets.MNIST(root="data", train=True), device)
-        testset = data.MNISTDataset(datasets.MNIST(root="data", train=False), device)
+        testset = data.PITHistDataset(config["samples"], config["bins"],
+                                      device)
+        trainset = data.PITHistSampler(config["bs"], config["samples"],
+                                       config["bins"], device)
         model = vae.VAE(config["bins"], config["hiddens"], config["neurons"],
-                        config["embed"], config["epsilon"])
-        #model = vae.ConvVAE(config["bins"], config["embed"], config["epsilon"])
+                        config["embeds"], config["epsilon"])
         model = model.to(device)
-        if config["modelfile"] is not None:
-            checkpoint = torch.load(config["modelfile"], map_location=device)
-            model.load_state_dict(checkpoint)
         vae.train_epochs(model, trainset, testset, config)
         torch.save(model.state_dict(), f"models/{run.name}.pt")
 

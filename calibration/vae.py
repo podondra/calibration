@@ -27,10 +27,9 @@ def kl_divergence(mu, ln_var):
 
 
 class AbstractVAE(nn.Module):
-    def __init__(self, embed_dim, epsilon):
+    def __init__(self, epsilon):
         super().__init__()
         # hyperparams
-        self.embed_dim = embed_dim
         self.epsilon = epsilon
         self.loss_rec = mse
 
@@ -75,38 +74,39 @@ class AbstractVAE(nn.Module):
 
 
 class VAE(AbstractVAE):
-    def __init__(self, input_dim, n_hiddens, n_neurons, embed_dim, epsilon):
-        super().__init__(embed_dim, epsilon)
-        # encoder
-        encoder = [nn.Linear(input_dim, n_neurons), nn.Tanh()]
-        for _ in range(n_hiddens - 1):
-            encoder += [nn.Linear(n_neurons, n_neurons), nn.Tanh()]
+    def __init__(self, inputs, hiddens, neurons, embeds, epsilon):
+        super().__init__(epsilon)
+        encoder = [nn.Linear(inputs, neurons), nn.Tanh()]
+        decoder = [nn.Linear(embeds, neurons), nn.Tanh()]
+        for _ in range(hiddens - 1):
+            encoder += [nn.Linear(neurons, neurons), nn.Tanh()]
+            decoder += [nn.Linear(neurons, neurons), nn.Tanh()]
+        decoder += [nn.Linear(neurons, inputs)]
+        decoder += [nn.Softmax(dim=1)]
         self.encoder = nn.Sequential(*encoder)
-        self.fc_mu = nn.Linear(n_neurons, embed_dim)
-        self.fc_ln_var = nn.Linear(n_neurons, embed_dim)
-        # decoder
-        decoder = [nn.Linear(embed_dim, n_neurons), nn.Tanh()]
-        for _ in range(n_hiddens - 1):
-            decoder += [nn.Linear(n_neurons, n_neurons), nn.Tanh()]
-        decoder += [nn.Linear(n_neurons, input_dim)]
-        # TODO decoder += [nn.Softmax(dim=1)]
-        decoder += [nn.Sigmoid()]
+        self.fc_mu = nn.Linear(neurons, embeds)
+        self.fc_ln_var = nn.Linear(neurons, embeds)
         self.decoder = nn.Sequential(*decoder)
 
 
 class ConvVAE(AbstractVAE):
-    def __init__(self, input_dim, embed_dim, epsilon):
-        super().__init__(embed_dim, epsilon)
+    def __init__(self, inputs, embeds, epsilon):
+        super().__init__(epsilon)
         kernel_size = 5
         padding = 2
-        self.encoder = nn.Sequential(nn.Unflatten(1, (1, input_dim)),
-                                     nn.Conv1d(1, 4, kernel_size, padding=padding), nn.Tanh(),
-                                     nn.Conv1d(4, 8, kernel_size, padding=padding), nn.Tanh(),
-                                     nn.Flatten())
-        self.fc_mu = nn.Linear(8 * input_dim, embed_dim)
-        self.fc_ln_var = nn.Linear(8 * input_dim, embed_dim)
-        self.decoder = nn.Sequential(nn.Linear(embed_dim, 8 * input_dim), nn.Tanh(),
-                                     nn.Unflatten(1, (8, input_dim)),
-                                     nn.ConvTranspose1d(8, 4, kernel_size, padding=padding), nn.Tanh(),
-                                     nn.ConvTranspose1d(4, 1, kernel_size, padding=padding),
-                                     nn.Flatten())
+        self.encoder = nn.Sequential(
+                nn.Unflatten(1, (1, inputs)),
+                nn.Conv1d(1, 4, kernel_size, padding=padding),
+                nn.Tanh(),
+                nn.Conv1d(4, 8, kernel_size, padding=padding),
+                nn.Tanh(),
+                nn.Flatten())
+        self.fc_mu = nn.Linear(8 * inputs, embeds)
+        self.fc_ln_var = nn.Linear(8 * inputs, embeds)
+        self.decoder = nn.Sequential(
+                nn.Linear(embeds, 8 * inputs), nn.Tanh(),
+                nn.Unflatten(1, (8, inputs)),
+                nn.ConvTranspose1d(8, 4, kernel_size, padding=padding),
+                nn.Tanh(),
+                nn.ConvTranspose1d(4, 1, kernel_size, padding=padding),
+                nn.Flatten())

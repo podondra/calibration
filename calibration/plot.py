@@ -2,6 +2,8 @@ from matplotlib import gridspec
 from matplotlib import pyplot
 import torch
 
+from . import data
+
 
 def pit_hist(ax, x, n_bins, **kwargs):
     ax.stairs(x, torch.linspace(0, 1, n_bins + 1), **kwargs)
@@ -31,7 +33,7 @@ def on_pick(event, ax, dataset, model, plot_fn):
     ax.clear()
     # true
     x, y = dataset.X[idx], dataset.y[idx]
-    ax.set_title(repr(y))
+    ax.set_title("\n".join(map(repr, data.label2dists(*y))))
     plot_fn(ax, x)
     # reconstruction
     mu, _ = model.encode(x.unsqueeze(0))

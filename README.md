@@ -6,7 +6,7 @@
     $ pip install -r requirements.txt
 
     $ screen
-    $ srun -p interactive --pty -c 32 --gres gpu:1 --mem 32G bash -i
+    $ srun --partition=interactive --pty --cpus-per-task=32 --gres=gpu:1 --mem=32G bash -i
     $ module load CUDA/11.7.0
     $ module load Python/3.10.4-GCCcore-11.3.0
     $ source venv/bin/activate
