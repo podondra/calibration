@@ -68,9 +68,11 @@ class AbstractVAE(nn.Module):
         loss_rec = self.loss_rec(X_pred, dataset.X).mean()
         kl_div = kl_divergence(mu, ln_var).mean()
         loss = loss_rec + self.epsilon * kl_div
-        return {"reconstruction": loss_rec.item(),
-                "kl_divergence": kl_div.item(),
-                "loss": loss.item()}
+        log = {"reconstruction": loss_rec.item(),
+               "kl_divergence": kl_div.item(),
+               "loss": loss.item()}
+        #log["embeddings"] = wandb.Table(columns=["x", "y"], data=mu.tolist())
+        return log
 
 
 class VAE(AbstractVAE):
