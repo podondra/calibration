@@ -19,9 +19,10 @@ from calibration import vae
 @click.option("--hiddens", default=1)
 @click.option("--lr", default=1e-2)
 @click.option("--neurons", default=16)
-@click.option("--patience", default=1000)
+@click.option("--patience", default=5000)
 @click.option("--samples", default=10000)
 @click.option("--step", default=1000)
+@click.option("--wd", default=0.0)
 def train(**hyperparams):
     with wandb.init(config=hyperparams) as run:
         config = wandb.config

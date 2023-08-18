@@ -9,7 +9,7 @@ import wandb
 
 
 def train_epochs(model, trainset, testset, hyperparams):
-    optimiser = Adam(model.parameters(), lr=hyperparams["lr"])
+    optimiser = Adam(model.parameters(), lr=hyperparams["lr"], weight_decay=hyperparams["wd"])
     scheduler = StepLR(optimiser, step_size=hyperparams["step"], gamma=hyperparams["gamma"])
     loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
     for epoch in range(1, hyperparams["epochs"] + 1):
@@ -20,7 +20,7 @@ def train_epochs(model, trainset, testset, hyperparams):
 
 
 def train_early_stopping(model, trainset, testset, hyperparams):
-    optimiser = Adam(model.parameters(), lr=hyperparams["lr"])
+    optimiser = Adam(model.parameters(), lr=hyperparams["lr"], weight_decay=hyperparams["wd"])
     scheduler = StepLR(optimiser, step_size=hyperparams["step"], gamma=hyperparams["gamma"])
     loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
     loss_rec_best = float("inf")
