@@ -1,3 +1,5 @@
+import copy
+
 import torch
 from torch import nn
 from torch.optim import Adam
@@ -8,14 +10,34 @@ import wandb
 
 def train_epochs(model, trainset, testset, hyperparams):
     optimiser = Adam(model.parameters(), lr=hyperparams["lr"])
-    scheduler = StepLR(optimiser, step_size=hyperparams["step"],
-                       gamma=hyperparams["gamma"])
+    scheduler = StepLR(optimiser, step_size=hyperparams["step"], gamma=hyperparams["gamma"])
     loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
     for epoch in range(1, hyperparams["epochs"] + 1):
         log_train = model.train(loader, optimiser)
         log_test = model.test(testset)
         wandb.log({"train": log_train, "test": log_test})
         scheduler.step()
+
+
+def train_early_stopping(model, trainset, testset, hyperparams):
+    optimiser = Adam(model.parameters(), lr=hyperparams["lr"])
+    scheduler = StepLR(optimiser, step_size=hyperparams["step"], gamma=hyperparams["gamma"])
+    loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
+    loss_rec_best = float("inf")
+    i = 0
+    while i < hyperparams["patience"]:
+        log_train = model.train(loader, optimiser)
+        log_test = model.test(testset)
+        if log_test["reconstruction"] < loss_rec_best:
+            loss_rec_best = log_test["reconstruction"]
+            model_state_dict_best = copy.deepcopy(model.state_dict())
+            i = 0
+        else:
+            i += 1
+        wandb.log({"train": log_train, "test": log_test})
+        wandb.run.summary["test.reconstruction"] = loss_rec_best
+        scheduler.step()
+    model.load_state_dict(model_state_dict_best)
 
 
 def mse(a, b):
@@ -49,7 +71,7 @@ class AbstractVAE(nn.Module):
         return self.decoder(x)
 
     def train(self, loader, optimiser):
-        # TODO correct running loss log
+        # TODO correct running loss log, but loader is always one batch only
         for x, _ in loader:
             optimiser.zero_grad()
             x_pred, mu, ln_var = self(x)

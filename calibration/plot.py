@@ -9,10 +9,10 @@ def pit_hist(ax, x, n_bins, **kwargs):
     ax.stairs(x, torch.linspace(0, 1, n_bins + 1), **kwargs)
 
 
-def get_grid():
+def get_grid(projection=None):
     fig = pyplot.figure(tight_layout=True)
     gs = gridspec.GridSpec(2, 2)
-    ax = fig.add_subplot(gs[:, 0])
+    ax = fig.add_subplot(gs[:, 0], projection=projection)
     ax_true = fig.add_subplot(gs[0, 1])
     ax_pred = fig.add_subplot(gs[1, 1])
     return fig, ax, ax_true, ax_pred

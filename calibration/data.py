@@ -28,11 +28,8 @@ class PITHistDataset(torch.utils.data.Dataset):
         # under- and overestimation
         location = torch.tensor([-0.5, -0.25, 0.0, 0.25, 0.5], device=device)
         # under- and overdispersion
-        #scale = torch.exp(math.log(1 / 3), math.log(3), steps=3, device=device))
         scale = torch.tensor([0.9, 1.0, 1.1], device=device)
         # uni- and multimodal
-        #x = torch.tensor([0.5, 0.75, 1], device=device)
-        #separation = 2 * (1 - x ** 2)
         separation = torch.tensor([0.0, 0.5, 1.0, 1.5], device=device)
         weights = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0], device=device)
         # generate data
@@ -45,7 +42,6 @@ class PITHistDataset(torch.utils.data.Dataset):
                 dist_pred = dists.Normal(b, s)
                 for d in separation:
                     for w in weights:
-                        #ws = torch.tensor([0.5, 0.5], device=device)
                         ws = torch.stack((w, 1 - w))
                         mus = torch.stack((-d / 2, d / 2))
                         sigma = 1 - d ** 2 / 4
@@ -76,16 +72,12 @@ class PITHistSampler(torch.utils.data.Dataset):
     def __getitem__(self, _):
         # under- and overestimation
         b = -0.5 + torch.rand(torch.Size(), device=self.device)
-        # under- and overdispersion: ln(3) = -1.0986
-        #s = torch.exp(-1.0986 + 1.0985 * torch.rand(torch.Size(), device=self.device))
+        # under- and overdispersion
         s = 0.9 + 0.2 * torch.rand(torch.Size(), device=self.device)
         # uni- and multimodal
-        #x = torch.rand(torch.Size(), device=self.device)
-        #d = 2 * (1 - x ** 2)
         d = 1.5 * torch.rand(torch.Size(), device=self.device)
         sigma = 1 - d ** 2 / 4
         w = torch.rand(torch.Size(), device=self.device)
-        #w = torch.tensor(0.5, device=self.device)
         ws = torch.stack((w, 1 - w))
         mus = torch.stack((-d / 2, d / 2))
         sample = dists.sample_normal_mixture(ws, mus, sigma,

@@ -9,17 +9,18 @@ from calibration import vae
 
 
 @click.command()
-@click.option("--bins", default=10)
+@click.option("--bins", default=20)
 @click.option("--bs", default=64)
 @click.option("--device", default="cuda")
 @click.option("--embeds", default=2)
 @click.option("--epochs", default=1000)
-@click.option("--epsilon", default=1e-3)
+@click.option("--epsilon", default=1e-5)
 @click.option("--gamma", default=1.0)
 @click.option("--hiddens", default=1)
-@click.option("--lr", default=1e-3)
-@click.option("--neurons", default=8)
-@click.option("--samples", default=1000)
+@click.option("--lr", default=1e-2)
+@click.option("--neurons", default=16)
+@click.option("--patience", default=1000)
+@click.option("--samples", default=10000)
 @click.option("--step", default=1000)
 def train(**hyperparams):
     with wandb.init(config=hyperparams) as run:
@@ -33,7 +34,7 @@ def train(**hyperparams):
         model = vae.VAE(config["bins"], config["hiddens"], config["neurons"],
                         config["embeds"], config["epsilon"])
         model = model.to(device)
-        vae.train_epochs(model, trainset, testset, config)
+        vae.train_early_stopping(model, trainset, testset, config)
         torch.save(model.state_dict(), f"models/{run.name}.pt")
 
 
