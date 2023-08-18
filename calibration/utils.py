@@ -1,6 +1,6 @@
 import torch
 
 
-def seed():
-    torch.manual_seed(16)
+def seed(seed=16):
+    torch.manual_seed(seed)
     torch.backends.cudnn.benchmark = False

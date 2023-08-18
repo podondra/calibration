@@ -71,7 +71,7 @@ class AbstractVAE(nn.Module):
         return self.decoder(x)
 
     def train(self, loader, optimiser):
-        # TODO correct running loss log, but loader is always one batch only
+        loss_recs, kl_divs, losses, batches = 0, 0, 0, 0
         for x, _ in loader:
             optimiser.zero_grad()
             x_pred, mu, ln_var = self(x)
@@ -80,9 +80,13 @@ class AbstractVAE(nn.Module):
             loss = loss_rec + self.epsilon * kl_div
             loss.backward()
             optimiser.step()
-        return {"reconstruction": loss_rec.item(),
-                "kl_divergence": kl_div.item(),
-                "loss": loss.item()}
+            loss_recs += loss_rec.item() * x.shape[0]
+            kl_divs += kl_div.item() * x.shape[0]
+            losses += loss.item() * x.shape[0]
+            batches += x.shape[0]
+        return {"reconstruction": loss_recs / batches,
+                "kl_divergence": kl_divs / batches,
+                "loss": losses / batches}
 
     @torch.no_grad()
     def test(self, dataset):
@@ -93,7 +97,6 @@ class AbstractVAE(nn.Module):
         log = {"reconstruction": loss_rec.item(),
                "kl_divergence": kl_div.item(),
                "loss": loss.item()}
-        #log["embeddings"] = wandb.Table(columns=["x", "y"], data=mu.tolist())
         return log
 
 
