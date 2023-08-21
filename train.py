@@ -1,6 +1,8 @@
 import click
 from torchvision import datasets
 import torch
+from torch import optim
+from torch.optim import lr_scheduler
 import wandb
 
 from calibration import data
@@ -17,10 +19,10 @@ from calibration import vae
 @click.option("--epsilon", default=1e-5)
 @click.option("--gamma", default=1.0)
 @click.option("--hiddens", default=1)
-@click.option("--log", default=10)
 @click.option("--lr", default=1e-2)
+@click.option("--momentum", default=0.0)
 @click.option("--neurons", default=16)
-@click.option("--patience", default=500)
+@click.option("--patience", default=5000)
 @click.option("--samples", default=10000)
 @click.option("--seed", default=16)
 @click.option("--step", default=1000)
@@ -32,13 +34,18 @@ def train(**hyperparams):
         utils.seed(config["seed"])
         testset = data.PITHistDataset(config["samples"], config["bins"],
                                       device)
-        trainset = data.PITHistSampler(config["log"] * config["bs"],
-                                       config["samples"], config["bins"],
-                                       device)
+        trainset = data.PITHistSampler(config["bs"], config["samples"],
+                                       config["bins"], device)
         model = vae.VAE(config["bins"], config["hiddens"], config["neurons"],
                         config["embeds"], config["epsilon"])
         model = model.to(device)
-        vae.train_early_stopping(model, trainset, testset, config)
+        optimiser = optim.SGD(model.parameters(),
+                              lr=config["lr"],
+                              momentum=config["momentum"],
+                              weight_decay=config["wd"])
+        #optimiser = optim.Adam(model.parameters(), lr=config["lr"], weight_decay=config["wd"])
+        scheduler = lr_scheduler.StepLR(optimiser, step_size=config["step"], gamma=config["gamma"])
+        vae.train_early_stopping(model, trainset, testset, optimiser, scheduler, config)
         torch.save(model.state_dict(), f"models/{run.name}.pt")
 
 

@@ -2,15 +2,11 @@ import copy
 
 import torch
 from torch import nn
-from torch.optim import Adam
-from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 import wandb
 
 
-def train_epochs(model, trainset, testset, hyperparams):
-    optimiser = Adam(model.parameters(), lr=hyperparams["lr"], weight_decay=hyperparams["wd"])
-    scheduler = StepLR(optimiser, step_size=hyperparams["step"], gamma=hyperparams["gamma"])
+def train_epochs(model, trainset, testset, optimiser, scheduler, hyperparams):
     loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
     for epoch in range(1, hyperparams["epochs"] + 1):
         log_train = model.train(loader, optimiser)
@@ -19,9 +15,7 @@ def train_epochs(model, trainset, testset, hyperparams):
         scheduler.step()
 
 
-def train_early_stopping(model, trainset, testset, hyperparams):
-    optimiser = Adam(model.parameters(), lr=hyperparams["lr"], weight_decay=hyperparams["wd"])
-    scheduler = StepLR(optimiser, step_size=hyperparams["step"], gamma=hyperparams["gamma"])
+def train_early_stopping(model, trainset, testset, optimiser, scheduler, hyperparams):
     loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
     loss_rec_best = float("inf")
     i = 0
@@ -41,19 +35,30 @@ def train_early_stopping(model, trainset, testset, hyperparams):
 
 
 def mse(a, b):
-    return (a - b).square().mean(1, keepdim=True)
+    return (a - b).square().mean(1)
 
 
 def kl_divergence(mu, ln_var):
-    return 0.5 * (ln_var.exp() + mu.square() - 1 - ln_var).sum(1, keepdim=True)
+    return 0.5 * (ln_var.exp() + mu.square() - 1 - ln_var).sum(1)
 
 
-class AbstractVAE(nn.Module):
-    def __init__(self, epsilon):
+class VAE(nn.Module):
+    def __init__(self, inputs, hiddens, neurons, embeds, epsilon):
         super().__init__()
+        encoder = [nn.Linear(inputs, neurons), nn.Tanh()]
+        decoder = [nn.Linear(embeds, neurons), nn.Tanh()]
+        for _ in range(hiddens - 1):
+            encoder += [nn.Linear(neurons, neurons), nn.Tanh()]
+            decoder += [nn.Linear(neurons, neurons), nn.Tanh()]
+        decoder += [nn.Linear(neurons, inputs)]
+        # TODO decoder += [nn.Softmax(dim=1)]
+        self.encoder = nn.Sequential(*encoder)
+        self.fc_mu = nn.Linear(neurons, embeds)
+        self.fc_ln_var = nn.Linear(neurons, embeds)
+        self.decoder = nn.Sequential(*decoder)
         # hyperparams
         self.epsilon = epsilon
-        self.loss_rec = mse
+        self.loss_rec = nn.CrossEntropyLoss(reduction="none")
 
     def forward(self, x):
         x = self.encoder(x)
@@ -68,7 +73,7 @@ class AbstractVAE(nn.Module):
 
     @torch.no_grad()
     def decode(self, x):
-        return self.decoder(x)
+        return self.decoder(x).softmax(1)
 
     def train(self, loader, optimiser):
         loss_recs, kl_divs, losses, batches = 0, 0, 0, 0
@@ -98,42 +103,3 @@ class AbstractVAE(nn.Module):
                "kl_divergence": kl_div.item(),
                "loss": loss.item()}
         return log
-
-
-class VAE(AbstractVAE):
-    def __init__(self, inputs, hiddens, neurons, embeds, epsilon):
-        super().__init__(epsilon)
-        encoder = [nn.Linear(inputs, neurons), nn.Tanh()]
-        decoder = [nn.Linear(embeds, neurons), nn.Tanh()]
-        for _ in range(hiddens - 1):
-            encoder += [nn.Linear(neurons, neurons), nn.Tanh()]
-            decoder += [nn.Linear(neurons, neurons), nn.Tanh()]
-        decoder += [nn.Linear(neurons, inputs)]
-        decoder += [nn.Softmax(dim=1)]
-        self.encoder = nn.Sequential(*encoder)
-        self.fc_mu = nn.Linear(neurons, embeds)
-        self.fc_ln_var = nn.Linear(neurons, embeds)
-        self.decoder = nn.Sequential(*decoder)
-
-
-class ConvVAE(AbstractVAE):
-    def __init__(self, inputs, embeds, epsilon):
-        super().__init__(epsilon)
-        kernel_size = 5
-        padding = 2
-        self.encoder = nn.Sequential(
-                nn.Unflatten(1, (1, inputs)),
-                nn.Conv1d(1, 4, kernel_size, padding=padding),
-                nn.Tanh(),
-                nn.Conv1d(4, 8, kernel_size, padding=padding),
-                nn.Tanh(),
-                nn.Flatten())
-        self.fc_mu = nn.Linear(8 * inputs, embeds)
-        self.fc_ln_var = nn.Linear(8 * inputs, embeds)
-        self.decoder = nn.Sequential(
-                nn.Linear(embeds, 8 * inputs), nn.Tanh(),
-                nn.Unflatten(1, (8, inputs)),
-                nn.ConvTranspose1d(8, 4, kernel_size, padding=padding),
-                nn.Tanh(),
-                nn.ConvTranspose1d(4, 1, kernel_size, padding=padding),
-                nn.Flatten())

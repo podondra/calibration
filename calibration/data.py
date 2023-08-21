@@ -30,7 +30,8 @@ class PITHistDataset(torch.utils.data.Dataset):
         # under- and overdispersion
         scale = torch.tensor([0.9, 1.0, 1.1], device=device)
         # uni- and multimodal
-        separation = torch.tensor([0.0, 0.5, 1.0, 1.5], device=device)
+        x = torch.linspace(0.0, 1.0, steps=4, device=device)
+        separation = 1.5 * (1 - x ** 4)
         weights = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0], device=device)
         # generate data
         self.n = len(location) * len(scale) * len(separation) * len(weights)
@@ -75,7 +76,7 @@ class PITHistSampler(torch.utils.data.Dataset):
         # under- and overdispersion
         s = 0.9 + 0.2 * torch.rand(torch.Size(), device=self.device)
         # uni- and multimodal
-        d = 1.5 * torch.rand(torch.Size(), device=self.device)
+        d = 1.5 * (1 - torch.rand(torch.Size(), device=self.device) ** 4)
         sigma = 1 - d ** 2 / 4
         w = torch.rand(torch.Size(), device=self.device)
         ws = torch.stack((w, 1 - w))
