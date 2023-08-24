@@ -14,13 +14,11 @@ from calibration import vae
 @click.option("--bins", default=20)
 @click.option("--bs", default=64)
 @click.option("--device", default="cuda")
-@click.option("--embeds", default=2)
-@click.option("--epochs", default=1000)
+@click.option("--embeds", default=3)
 @click.option("--epsilon", default=1e-5)
 @click.option("--gamma", default=1.0)
 @click.option("--hiddens", default=1)
 @click.option("--lr", default=1e-2)
-@click.option("--momentum", default=0.0)
 @click.option("--neurons", default=16)
 @click.option("--patience", default=5000)
 @click.option("--samples", default=10000)
@@ -32,18 +30,12 @@ def train(**hyperparams):
         config = wandb.config
         device = torch.device(config["device"])
         utils.seed(config["seed"])
-        testset = data.PITHistDataset(config["samples"], config["bins"],
-                                      device)
-        trainset = data.PITHistSampler(config["bs"], config["samples"],
-                                       config["bins"], device)
+        testset = data.PITHistDataset(config["samples"], config["bins"], device)
+        trainset = data.PITHistSampler(config["bs"], config["samples"], config["bins"], device)
         model = vae.VAE(config["bins"], config["hiddens"], config["neurons"],
                         config["embeds"], config["epsilon"])
         model = model.to(device)
-        optimiser = optim.SGD(model.parameters(),
-                              lr=config["lr"],
-                              momentum=config["momentum"],
-                              weight_decay=config["wd"])
-        #optimiser = optim.Adam(model.parameters(), lr=config["lr"], weight_decay=config["wd"])
+        optimiser = optim.Adam(model.parameters(), lr=config["lr"], weight_decay=config["wd"])
         scheduler = lr_scheduler.StepLR(optimiser, step_size=config["step"], gamma=config["gamma"])
         vae.train_early_stopping(model, trainset, testset, optimiser, scheduler, config)
         torch.save(model.state_dict(), f"models/{run.name}.pt")

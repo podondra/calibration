@@ -14,44 +14,36 @@ def pit_hist(x, n_bins):
     return torch.histc(x, bins=n_bins, min=0, max=1) / len(x)
 
 
-def label2dists(b, s, d, w):
-    dist_pred = dists.Normal(b, s)
-    sigma = 1 - d ** 2 / 4
+def y2dists(w, d, s1, s2):
     dist_true = dists.Mixture(torch.stack((w, 1 - w)),
-                              [dists.Normal(-d / 2, sigma),
-                               dists.Normal(d / 2, sigma)])
-    return dist_pred, dist_true
+                              [dists.Normal(-d / 2, s1), dists.Normal(d / 2, s2)])
+    return dists.Normal(0, 1), dist_true
 
 
 class PITHistDataset(torch.utils.data.Dataset):
-    def __init__(self, samples, n_bins, device):
-        # under- and overestimation
-        location = torch.tensor([-0.5, -0.25, 0.0, 0.25, 0.5], device=device)
-        # under- and overdispersion
-        scale = torch.tensor([0.9, 1.0, 1.1], device=device)
-        # uni- and multimodal
-        x = torch.linspace(0.0, 1.0, steps=4, device=device)
-        separation = 1.5 * (1 - x ** 4)
-        weights = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0], device=device)
+    def __init__(self, samples, n_bins, device=None):
+        weights = torch.linspace(0.0, 1.0, steps=5, device=device)
+        x = torch.linspace(0.1, 1.0, steps=5, device=device)
+        separation = 2 * (1 - x ** 2)
+        scales = torch.logspace(-1, 1, steps=5, base=2, device=device)
         # generate data
-        self.n = len(location) * len(scale) * len(separation) * len(weights)
+        self.n = len(separation) * len(weights) * len(scales) ** 2
         self.X = torch.empty(self.n, n_bins, device=device)
         self.y = torch.empty(self.n, 4, device=device)
         counter = itertools.count()
-        for b in location:
-            for s in scale:
-                dist_pred = dists.Normal(b, s)
-                for d in separation:
-                    for w in weights:
+        dist_pred = dists.Normal(0, 1)
+        for w in weights:
+            for d in separation:
+                for s1 in scales:
+                    for s2 in scales:
                         ws = torch.stack((w, 1 - w))
-                        mus = torch.stack((-d / 2, d / 2))
-                        sigma = 1 - d ** 2 / 4
-                        sample = dists.sample_normal_mixture(ws, mus, sigma,
-                                                             samples, device)
+                        mu = torch.stack((-d / 2, d / 2))
+                        sigma = torch.stack((s1, s2))
+                        sample = dists.sample_normal_mixture(ws, mu, sigma, samples, device)
                         pit_values = pit(dist_pred, sample)
                         i = next(counter)
                         self.X[i] = pit_hist(pit_values, n_bins)
-                        self.y[i] = torch.stack((b, s, d, ws[0]))
+                        self.y[i] = torch.stack((w, d, s1, s2))
 
     def __len__(self):
         return self.n
@@ -61,31 +53,30 @@ class PITHistDataset(torch.utils.data.Dataset):
 
 
 class PITHistSampler(torch.utils.data.Dataset):
-    def __init__(self, n, samples, n_bins, device):
+    def __init__(self, n, samples, n_bins, device=None):
         self.n = n
         self.samples = samples
         self.n_bins = n_bins
         self.device = device
+        self.dist_pred = dists.Normal(torch.tensor(0.0), torch.tensor(1.0))
 
     def __len__(self):
         return self.n
 
     def __getitem__(self, _):
-        # under- and overestimation
-        b = -0.5 + torch.rand(torch.Size(), device=self.device)
-        # under- and overdispersion
-        s = 0.9 + 0.2 * torch.rand(torch.Size(), device=self.device)
-        # uni- and multimodal
-        d = 1.5 * (1 - torch.rand(torch.Size(), device=self.device) ** 4)
-        sigma = 1 - d ** 2 / 4
+        # weights
         w = torch.rand(torch.Size(), device=self.device)
         ws = torch.stack((w, 1 - w))
-        mus = torch.stack((-d / 2, d / 2))
-        sample = dists.sample_normal_mixture(ws, mus, sigma,
-                                             self.samples, self.device)
-        dist_pred = dists.Normal(b, s)
-        pit_values = pit(dist_pred, sample)
-        return pit_hist(pit_values, self.n_bins), torch.stack((b, s, d, w))
+        # separtation implies means
+        x = 0.1 + 0.9 * torch.rand(torch.Size(), device=self.device)
+        d = 2.0 * (1 - x ** 2)
+        mu = torch.stack((-d / 2, d / 2))
+        # scales
+        sigma = 2 ** (-1 + 2 * torch.rand(2, device=self.device))
+        # generate
+        sample = dists.sample_normal_mixture(ws, mu, sigma, self.samples, self.device)
+        pit_values = pit(self.dist_pred, sample)
+        return pit_hist(pit_values, self.n_bins), torch.stack((w, d, sigma[0], sigma[1]))
 
 
 class MNISTDataset(torch.utils.data.Dataset):

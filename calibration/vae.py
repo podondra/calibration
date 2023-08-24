@@ -34,12 +34,12 @@ def train_early_stopping(model, trainset, testset, optimiser, scheduler, hyperpa
     model.load_state_dict(model_state_dict_best)
 
 
-def mse(a, b):
-    return (a - b).square().mean(1)
+def mse(inputs, targets):
+    return (inputs.softmax(-1) - targets).square().mean(-1)
 
 
 def kl_divergence(mu, ln_var):
-    return 0.5 * (ln_var.exp() + mu.square() - 1 - ln_var).sum(1)
+    return 0.5 * (ln_var.exp() + mu.square() - 1 - ln_var).sum(-1)
 
 
 class VAE(nn.Module):
@@ -51,14 +51,13 @@ class VAE(nn.Module):
             encoder += [nn.Linear(neurons, neurons), nn.Tanh()]
             decoder += [nn.Linear(neurons, neurons), nn.Tanh()]
         decoder += [nn.Linear(neurons, inputs)]
-        # TODO decoder += [nn.Softmax(dim=1)]
         self.encoder = nn.Sequential(*encoder)
         self.fc_mu = nn.Linear(neurons, embeds)
         self.fc_ln_var = nn.Linear(neurons, embeds)
         self.decoder = nn.Sequential(*decoder)
         # hyperparams
         self.epsilon = epsilon
-        self.loss_rec = nn.CrossEntropyLoss(reduction="none")
+        self.loss_rec = mse    #nn.CrossEntropyLoss(reduction="none")
 
     def forward(self, x):
         x = self.encoder(x)
@@ -73,7 +72,7 @@ class VAE(nn.Module):
 
     @torch.no_grad()
     def decode(self, x):
-        return self.decoder(x).softmax(1)
+        return self.decoder(x).softmax(-1)
 
     def train(self, loader, optimiser):
         loss_recs, kl_divs, losses, batches = 0, 0, 0, 0
