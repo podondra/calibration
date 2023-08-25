@@ -1,14 +1,12 @@
 import copy
 
 import torch
-from torch import nn
-from torch.utils.data import DataLoader
 import wandb
 
 
 def train_epochs(model, trainset, testset, optimiser, scheduler, hyperparams):
-    loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
-    for epoch in range(1, hyperparams["epochs"] + 1):
+    loader = torch.utils.data.DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
+    for epoch in range(hyperparams["epochs"]):
         log_train = model.train(loader, optimiser)
         log_test = model.test(testset)
         wandb.log({"train": log_train, "test": log_test})
@@ -16,89 +14,103 @@ def train_epochs(model, trainset, testset, optimiser, scheduler, hyperparams):
 
 
 def train_early_stopping(model, trainset, testset, optimiser, scheduler, hyperparams):
-    loader = DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
-    loss_rec_best = float("inf")
+    loader = torch.utils.data.DataLoader(trainset, batch_size=hyperparams["bs"], shuffle=True)
+    elbo_best = float("-inf")
     i = 0
     while i < hyperparams["patience"]:
         log_train = model.train(loader, optimiser)
         log_test = model.test(testset)
-        if log_test["reconstruction"] < loss_rec_best:
-            loss_rec_best = log_test["reconstruction"]
+        if log_test["elbo"] > elbo_best:
+            elbo_best = log_test["elbo"]
             model_state_dict_best = copy.deepcopy(model.state_dict())
             i = 0
         else:
             i += 1
         wandb.log({"train": log_train, "test": log_test})
-        wandb.run.summary["test.reconstruction"] = loss_rec_best
+        wandb.run.summary["test.elbo"] = elbo_best
         scheduler.step()
     model.load_state_dict(model_state_dict_best)
 
 
-def mse(inputs, targets):
-    return (inputs.softmax(-1) - targets).square().mean(-1)
+class Encoder(torch.nn.Module):
+    def __init__(self, inputs, neurons, latents):
+        super().__init__()
+        self.fc_hidden = torch.nn.Linear(inputs, neurons)
+        self.fc_mu = torch.nn.Linear(neurons, latents)
+        self.fc_ln_var = torch.nn.Linear(neurons, latents)
+
+    def forward(self, x):
+        h = torch.tanh(self.fc_hidden(x))
+        mu = self.fc_mu(h)
+        ln_var = self.fc_ln_var(h)
+        return mu, ln_var
+
+
+class Decoder(torch.nn.Module):
+    def __init__(self, latents, neurons, outputs):
+        super().__init__()
+        self.fc_hidden = torch.nn.Linear(latents, neurons)
+        self.fc_mu = torch.nn.Linear(neurons, outputs)
+        self.fc_ln_var = torch.nn.Linear(neurons, outputs)
+
+    def forward(self, z):
+        h = torch.tanh(self.fc_hidden(z))
+        mu = torch.softmax(self.fc_mu(h), dim=-1)
+        ln_var = self.fc_ln_var(h)
+        return mu, ln_var
 
 
 def kl_divergence(mu, ln_var):
-    return 0.5 * (ln_var.exp() + mu.square() - 1 - ln_var).sum(-1)
+    return -0.5 * torch.sum(1 + ln_var - mu ** 2 - ln_var.exp(), dim=-1)
 
 
-class VAE(nn.Module):
-    def __init__(self, inputs, hiddens, neurons, embeds, epsilon):
+def likelihood(mu, ln_var, x):
+    # L = 1 according to Kingma & Welling (2014)
+    covariance_matrix = torch.diag_embed(torch.exp(ln_var))
+    m = torch.distributions.MultivariateNormal(mu, covariance_matrix)
+    return m.log_prob(x)
+
+
+class VAE(torch.nn.Module):
+    def __init__(self, inputs, neurons, latents, beta=1):
         super().__init__()
-        encoder = [nn.Linear(inputs, neurons), nn.Tanh()]
-        decoder = [nn.Linear(embeds, neurons), nn.Tanh()]
-        for _ in range(hiddens - 1):
-            encoder += [nn.Linear(neurons, neurons), nn.Tanh()]
-            decoder += [nn.Linear(neurons, neurons), nn.Tanh()]
-        decoder += [nn.Linear(neurons, inputs)]
-        self.encoder = nn.Sequential(*encoder)
-        self.fc_mu = nn.Linear(neurons, embeds)
-        self.fc_ln_var = nn.Linear(neurons, embeds)
-        self.decoder = nn.Sequential(*decoder)
-        # hyperparams
-        self.epsilon = epsilon
-        self.loss_rec = mse    #nn.CrossEntropyLoss(reduction="none")
+        self.beta = beta
+        self.encoder = Encoder(inputs, neurons, latents)
+        self.decoder = Decoder(latents, neurons, inputs)
 
-    def forward(self, x):
-        x = self.encoder(x)
-        mu, ln_var = self.fc_mu(x), self.fc_ln_var(x)
-        z = mu + (0.5 * ln_var).exp() * torch.randn_like(mu)
-        return self.decoder(z), mu, ln_var
+    def rsample(self, mu, ln_var):
+        return mu + (0.5 * ln_var).exp() * torch.randn_like(mu)
 
-    @torch.no_grad()
-    def encode(self, x):
-        x = self.encoder(x)
-        return self.fc_mu(x), (0.5 * self.fc_ln_var(x)).exp()
-
-    @torch.no_grad()
-    def decode(self, x):
-        return self.decoder(x).softmax(-1)
+    def elbo(self, ln_pxz, kl):
+        return torch.mean(ln_pxz - self.beta * kl)
 
     def train(self, loader, optimiser):
-        loss_recs, kl_divs, losses, batches = 0, 0, 0, 0
         for x, _ in loader:
             optimiser.zero_grad()
-            x_pred, mu, ln_var = self(x)
-            loss_rec = self.loss_rec(x_pred, x).mean()
-            kl_div = kl_divergence(mu, ln_var).mean()
-            loss = loss_rec + self.epsilon * kl_div
+            # forward
+            mu_z, ln_var_z = self.encoder(x)
+            z = self.rsample(mu_z, ln_var_z)
+            mu_x, ln_var_x = self.decoder(z)
+            kl = kl_divergence(mu_z, ln_var_z)
+            ln_pxz = likelihood(mu_x, ln_var_x, x)
+            elbo = self.elbo(ln_pxz, kl)
+            loss = -elbo
+            # backward
             loss.backward()
             optimiser.step()
-            loss_recs += loss_rec.item() * x.shape[0]
-            kl_divs += kl_div.item() * x.shape[0]
-            losses += loss.item() * x.shape[0]
-            batches += x.shape[0]
-        return {"reconstruction": loss_recs / batches,
-                "kl_divergence": kl_divs / batches,
-                "loss": losses / batches}
+        # the sampler has always only single batch
+        return {"elbo": elbo.item(),
+                "kl": kl.detach().mean().item(),
+                "ln_pxz": ln_pxz.detach().mean().item()}
 
     @torch.no_grad()
     def test(self, dataset):
-        X_pred, mu, ln_var = self(dataset.X)
-        loss_rec = self.loss_rec(X_pred, dataset.X).mean()
-        kl_div = kl_divergence(mu, ln_var).mean()
-        loss = loss_rec + self.epsilon * kl_div
-        log = {"reconstruction": loss_rec.item(),
-               "kl_divergence": kl_div.item(),
-               "loss": loss.item()}
-        return log
+        mu_z, ln_var_z = self.encoder(dataset.X)
+        z = self.rsample(mu_z, ln_var_z)
+        mu_x, ln_var_x = self.decoder(z)
+        kl = kl_divergence(mu_z, ln_var_z)
+        ln_pxz = likelihood(mu_x, ln_var_x, dataset.X)
+        elbo = self.elbo(ln_pxz, kl)
+        return {"elbo": elbo.item(),
+                "kl": kl.detach().mean().item(),
+                "ln_pxz": ln_pxz.detach().mean().item()}
