@@ -45,6 +45,12 @@ class Encoder(torch.nn.Module):
         ln_var = self.fc_ln_var(h)
         return mu, ln_var
 
+    @torch.no_grad()
+    def encode(self, x):
+        mu, ln_var = self(x)
+        sigma = torch.exp(0.5 * ln_var)
+        return mu, sigma
+
 
 class Decoder(torch.nn.Module):
     def __init__(self, latents, neurons, outputs):
@@ -58,6 +64,12 @@ class Decoder(torch.nn.Module):
         mu = torch.softmax(self.fc_mu(h), dim=-1)
         ln_var = self.fc_ln_var(h)
         return mu, ln_var
+
+    @torch.no_grad()
+    def decode(self, z):
+        mu, ln_var = self(z)
+        sigma = torch.exp(0.5 * ln_var)
+        return mu, sigma
 
 
 def kl_divergence(mu, ln_var):
@@ -78,8 +90,14 @@ class VAE(torch.nn.Module):
         self.encoder = Encoder(inputs, neurons, latents)
         self.decoder = Decoder(latents, neurons, inputs)
 
+    def encode(self, x):
+        return self.encoder.encode(x)
+
+    def decode(self, z):
+        return self.decoder.decode(z)
+
     def rsample(self, mu, ln_var):
-        return mu + (0.5 * ln_var).exp() * torch.randn_like(mu)
+        return mu + torch.exp(0.5 * ln_var) * torch.randn_like(mu)
 
     def elbo(self, ln_pxz, kl):
         return torch.mean(ln_pxz - self.beta * kl)
