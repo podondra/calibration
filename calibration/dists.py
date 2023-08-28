@@ -28,7 +28,7 @@ class Normal(Distribution):
 
 def sample_normal_mixture(weights, mus, sigmas, size, device=None):
     mus, sigmas = mus.unsqueeze(-1), sigmas.unsqueeze(-1)
-    sample = mus + sigmas * torch.randn(2, size, device=device)
+    sample = mus + sigmas * torch.randn(len(weights), size, device=device)
     index = torch.multinomial(weights, num_samples=size, replacement=True)
     return torch.gather(sample, 0, index.unsqueeze(0)).squeeze()
 
