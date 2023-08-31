@@ -2,58 +2,46 @@ import math
 
 import torch
 
-from . import dists
+from . import dist
 
 
-def mdn2dist(alpha, mu, sigma):
-    return dists.Mixture(alpha, [dists.Normal(m, s) for m, s in zip(mu, sigma)])
+def params2dist(alpha, mu, sigma):
+    alpha = alpha.squeeze()
+    mu = mu.squeeze()
+    sigma = sigma.squeeze()
+    return dist.Mixture(alpha,
+                        [dist.Gaussian(m, s) for m, s in zip(mu, sigma)])
 
 
 class MDN(torch.nn.Module):
-    def __init__(self, inputs, neurons, hiddens, k):
+    def __init__(self, inputs, neurons, m):
         super().__init__()
-        layers = [torch.nn.Linear(inputs, neurons), torch.nn.ReLU()]
-        for _ in range(hiddens - 1):
-            layers += [torch.nn.Linear(neurons, neurons), torch.nn.ReLU()]
-        self.fc_hiddens = torch.nn.Sequential(*layers)
-        self.fc_alpha = torch.nn.Linear(neurons, k)
-        self.fc_mu = torch.nn.Linear(neurons, k)
-        self.fc_ln_var = torch.nn.Linear(neurons, k)
+        self.m = m
+        self.linear1 = torch.nn.Linear(inputs, neurons)
+        self.linear2 = torch.nn.Linear(neurons, 3 * m)
 
     def forward(self, x):
-        h = self.fc_hiddens(x)
-        alpha = torch.softmax(self.fc_alpha(h), dim=-1)
-        mu = self.fc_mu(h)
-        ln_var = self.fc_ln_var(h)
-        return alpha, mu, ln_var
-
-    def criterion(self, alpha, mu, ln_var, y):
-        alpha, mu, ln_var = alpha.unsqueeze(1), mu.unsqueeze(1), ln_var.unsqueeze(1)
-        y = y.unsqueeze(-1)
-        var = torch.exp(ln_var)
-        return -torch.log(torch.sum(alpha
-                                    * (1 / (torch.sqrt(2 * math.pi * var)))
-                                    * torch.exp(-0.5 * ((y - mu) ** 2 / var)), dim=-1))
-        # TODO torch.log(alpha) can be unstable, but it is softmax output
-        #return -torch.logsumexp(torch.log(alpha)
-        #                        - 0.5 * torch.log(2 * math.pi * var)
-        #                        - 0.5 * ((y - mu) ** 2 / var), dim=-1)
+        z = self.linear2(torch.tanh(self.linear1(x)))
+        alpha = torch.softmax(z[..., :self.m], dim=-1)    # mixing coefficients
+        mu = z[..., self.m:-self.m]    # means
+        sigma = torch.exp(z[..., -self.m:])    # variances
+        return alpha, mu, sigma
 
     def train(self, loader, optimiser):
         for x, sample in loader:
             optimiser.zero_grad()
-            alpha, mu, ln_var = self(x)
-            loss = self.criterion(alpha, mu, ln_var, sample).mean()
+            alpha, mu, sigma = self(x)
+            loss = dist.nll_gaussian_mixture(alpha, mu, sigma, sample).mean()
             loss.backward()
             optimiser.step()
-        return {"loss": loss.item()}
+        return {"loss": loss}
 
     @torch.no_grad()
     def evaluate(self, dataset):
-        alpha, mu, ln_var = self(dataset.X)
-        return {"loss": self.criterion(alpha, mu, ln_var, dataset.sample).mean().item()}
+        y_pred = self(dataset.histogram)
+        y = dataset.sample
+        return {"loss": dist.nll_gaussian_mixture(*y_pred, y).mean()}
 
     @torch.no_grad()
     def predict(self, X):
-        alpha, mu, ln_var = self(X)
-        return alpha, mu, torch.exp(0.5 * ln_var)
+        return self(X)

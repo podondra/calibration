@@ -1,9 +1,8 @@
 import itertools
-import math
 
 import torch
 
-from . import dists
+from . import dist
 
 
 def pit(dist, y):
@@ -14,32 +13,33 @@ def pit_hist(x, bins):
     return torch.histc(x, bins=bins, min=0, max=1) / len(x)
 
 
-def y2dist(w, d, s1, s2):
-    return dists.Mixture(torch.stack((w, 1 - w)),
-                         [dists.Normal(-d / 2, s1),
-                          dists.Normal(d / 2, s2)])
+def y2dist(weight, separation, variance1, variance2):
+    return dist.Mixture(torch.stack((weight, 1 - weight)),
+                        [dist.Gaussian(-separation / 2, variance1),
+                         dist.Gaussian(+separation / 2, variance2)])
 
-def random_pit_hist(samples,
-                    bins,
-                    device=None):
-    dist_pred = dists.Normal(torch.tensor(0.0, device=device), torch.tensor(1.0, device=device))
+
+def random_pit_hist(samples, bins, device=None):
+    dist_pred = dist.Gaussian(torch.tensor(0.0, device=device),
+                              torch.tensor(1.0, device=device))
     # weights
-    w = torch.rand(torch.Size(), device=device)
-    ws = torch.stack((w, 1 - w))
-    # separtation implies means
+    weight = torch.rand(torch.Size(), device=device)
+    weights = torch.stack((weight, 1 - weight))
+    # separation implies means
     x = 0.1 + 0.9 * torch.rand(torch.Size(), device=device)
-    d = 2.0 * (1 - x ** 2)
-    mu = torch.stack((-d / 2, d / 2))
-    # scales
-    sigma = 2 ** (-1 + 2 * torch.rand(2, device=device))
+    separation = 2.0 * (1 - x ** 2)
+    mean = torch.stack((-separation / 2, separation / 2))
+    # variance
+    variance = 2 ** (-2 + 4 * torch.rand(2, device=device))
     # generate
-    sample = dists.sample_normal_mixture(ws, mu, sigma, samples, device)
-    X = pit_hist(pit(dist_pred, sample), bins)
-    y = torch.stack((w, d, sigma[0], sigma[1]))
-    return sample, X, y
+    sample = dist.sample_gaussian_mixture(weights, mean, variance, samples,
+                                          device)
+    histogram = pit_hist(pit(dist_pred, sample), bins)
+    y = torch.stack((weight, separation, variance[0], variance[1]))
+    return sample, histogram, y
 
 
-class PITHistSampler(torch.utils.data.IterableDataset):
+class PITSampler(torch.utils.data.IterableDataset):
     def __init__(self, bs, bins, samples=10000, device=None):
         self.bs = bs
         self.samples = samples
@@ -54,19 +54,21 @@ class PITHistSampler(torch.utils.data.IterableDataset):
         self.i += 1
         if self.i > self.bs:
             raise StopIteration()
-        sample, X, y = random_pit_hist(self.samples, self.bins, device=self.device)
-        return X, sample
+        sample, histogram, y = random_pit_hist(self.samples,
+                                               self.bins,
+                                               self.device)
+        return histogram, sample
 
 
-class PITHistRndDataset(torch.utils.data.Dataset):
+class PITDataset(torch.utils.data.Dataset):
     def __init__(self, n, bins, samples=10000, device=None):
         self.n = n
-        self.X = torch.empty(self.n, bins, device=device)
+        self.histogram = torch.empty(self.n, bins, device=device)
         self.sample = torch.empty(self.n, samples, device=device)
         self.y = torch.empty(self.n, 4, device=device)
         for i in range(n):
-            sample, X, y = random_pit_hist(samples, bins, device=device)
-            self.X[i] = X
+            sample, histogram, y = random_pit_hist(samples, bins, device)
+            self.histogram[i] = histogram
             self.sample[i] = sample
             self.y[i] = y
 
@@ -74,36 +76,42 @@ class PITHistRndDataset(torch.utils.data.Dataset):
         return self.n
 
     def __getitem__(self, i):
-        return self.X[i], self.sample[i]
+        return self.histogram[i], self.sample[i]
 
 
-class PITHistRefDataset(torch.utils.data.Dataset):
+class PITReference(torch.utils.data.Dataset):
     def __init__(self, bins, samples=10000, steps=5, device=None):
+        dist_pred = dist.Gaussian(torch.tensor(0.0, device=device),
+                                  torch.tensor(1.0, device=device))
         weights = torch.linspace(0.0, 1.0, steps, device=device)
         x = torch.linspace(0.1, 1.0, steps, device=device)
-        separation = 2 * (1 - x ** 2)
-        scales = torch.logspace(-1, 1, steps, base=2, device=device)
+        separations = 2 * (1 - x ** 2)
+        variances = torch.logspace(-2, 2, steps, base=2, device=device)
         # generate data
-        self.n = len(separation) * len(weights) * len(scales) ** 2
+        self.n = len(separations) * len(weights) * len(variances) ** 2
         self.sample = torch.empty(self.n, samples, device=device)
-        self.X = torch.empty(self.n, bins, device=device)
+        self.histogram = torch.empty(self.n, bins, device=device)
         self.y = torch.empty(self.n, 4, device=device)
         counter = itertools.count()
-        dist_pred = dists.Normal(0, 1)
         for w in weights:
-            for d in separation:
-                for s1 in scales:
-                    for s2 in scales:
+            for s in separations:
+                for variance1 in variances:
+                    for variance2 in variances:
                         i = next(counter)
-                        ws = torch.stack((w, 1 - w))
-                        mu = torch.stack((-d / 2, d / 2))
-                        sigma = torch.stack((s1, s2))
-                        self.sample[i] = dists.sample_normal_mixture(ws, mu, sigma, samples, device)
-                        self.X[i] = pit_hist(pit(dist_pred, self.sample[i]), bins)
-                        self.y[i] = torch.stack((w, d, s1, s2))
+                        weight = torch.stack((w, 1 - w))
+                        mean = torch.stack((-s / 2, s / 2))
+                        variance = torch.stack((variance1, variance2))
+                        self.sample[i] = dist.sample_gaussian_mixture(weight,
+                                                                      mean,
+                                                                      variance,
+                                                                      samples,
+                                                                      device)
+                        pit_values = pit(dist_pred, self.sample[i])
+                        self.histogram[i] = pit_hist(pit_values, bins)
+                        self.y[i] = torch.stack((w, s, variance1, variance2))
 
     def __len__(self):
         return self.n
 
     def __getitem__(self, i):
-        return self.X[i], self.sample[i]
+        return self.histogram[i], self.sample[i]
