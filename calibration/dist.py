@@ -27,9 +27,6 @@ class Gaussian:
         self.variance = variance
         self.sd = torch.sqrt(variance)
 
-    def __repr__(self):
-        return f"Gaussian({self.mean:.1f}, {self.variance:.1f})"
-
     def cdf(self, x):
         return 0.5 + 0.5 * torch.erf((x - self.mean)
                                      / (self.sd * math.sqrt(2)))
@@ -46,8 +43,9 @@ class Mixture:
     def __init__(self, weight, dist):
         self.weight, self.dist = weight, dist
 
-    def __repr__(self):
-        return f"Mixture({self.weight}, {repr(self.dist)})"
+    def cdf(self, x):
+        return torch.stack([w * d.cdf(x)
+                            for w, d in zip(self.weight, self.dist)]).sum(0)
 
     def pdf(self, x):
         return torch.stack([w * d.pdf(x)

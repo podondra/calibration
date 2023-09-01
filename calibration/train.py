@@ -4,11 +4,20 @@ import torch
 import wandb
 
 
-def train_early_stopping(model, loader, validset, optimiser, hyperparams):
+def epochs(model, loader, trainset, validset, optimiser, hyperparams):
+    for _ in range(hyperparams["epochs"]):
+        model.train(loader, optimiser)
+        log_train = model.evaluate(trainset)
+        log_valid = model.evaluate(validset)
+        wandb.log({"train": log_train, "valid": log_valid})
+
+
+def early_stopping(model, loader, trainset, validset, optimiser, hyperparams):
     loss_best = float("inf")
     i = 0
     while i < hyperparams["patience"]:
-        log_train = model.train(loader, optimiser)
+        model.train(loader, optimiser)
+        log_train = model.evaluate(trainset)
         log_valid = model.evaluate(validset)
         if log_valid["loss"] < loss_best:
             loss_best = log_valid["loss"]

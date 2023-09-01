@@ -34,14 +34,17 @@ class MDN(torch.nn.Module):
             loss = dist.nll_gaussian_mixture(alpha, mu, sigma, sample).mean()
             loss.backward()
             optimiser.step()
-        return {"loss": loss}
 
     @torch.no_grad()
     def evaluate(self, dataset):
-        y_pred = self(dataset.histogram)
-        y = dataset.sample
+        y_pred = self(dataset.X)
+        y = dataset.y
         return {"loss": dist.nll_gaussian_mixture(*y_pred, y).mean()}
 
     @torch.no_grad()
     def predict(self, X):
         return self(X)
+
+
+class DE(torch.nn.Module):
+    ...
