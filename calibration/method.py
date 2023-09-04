@@ -1,30 +1,58 @@
+import copy
 import math
 
 import torch
+import wandb
 
 from . import dist
 
 
-def params2dist(alpha, mu, sigma):
-    alpha = alpha.squeeze()
-    mu = mu.squeeze()
-    sigma = sigma.squeeze()
-    return dist.Mixture(alpha,
-                        [dist.Gaussian(m, s) for m, s in zip(mu, sigma)])
+def epochs(model, loader, trainset, validset, optimiser, hyperparams):
+    for _ in range(hyperparams["epochs"]):
+        model.train(loader, optimiser)
+        log_train = model.evaluate(trainset)
+        log_valid = model.evaluate(validset)
+        wandb.log({"train": log_train, "valid": log_valid})
+
+
+def early_stopping(model, loader, trainset, validset, optimiser, hyperparams):
+    loss_best = float("inf")
+    i = 0
+    while i < hyperparams["patience"]:
+        model.train(loader, optimiser)
+        log_train = model.evaluate(trainset)
+        log_valid = model.evaluate(validset)
+        if log_valid["loss"] < loss_best:
+            loss_best = log_valid["loss"]
+            model_state_dict_best = copy.deepcopy(model.state_dict())
+            i = 0
+        else:
+            i += 1
+        wandb.log({"train": log_train, "valid": log_valid})
+        wandb.run.summary["valid.loss"] = loss_best
+    model.load_state_dict(model_state_dict_best)
+
+
+@torch.no_grad()
+def predict(model, X):
+    return model(X)
 
 
 class MDN(torch.nn.Module):
-    def __init__(self, inputs, neurons, m):
+    def __init__(self, inputs, neurons, components):
         super().__init__()
-        self.m = m
+        self.components = components
         self.linear1 = torch.nn.Linear(inputs, neurons)
-        self.linear2 = torch.nn.Linear(neurons, 3 * m)
+        self.linear2 = torch.nn.Linear(neurons, 3 * components)
 
     def forward(self, x):
         z = self.linear2(torch.tanh(self.linear1(x)))
-        alpha = torch.softmax(z[..., :self.m], dim=-1)    # mixing coefficients
-        mu = z[..., self.m:-self.m]    # means
-        sigma = torch.exp(z[..., -self.m:])    # variances
+        # mixing coefficients
+        alpha = torch.softmax(z[..., :self.components], dim=-1)
+        # means
+        mu = z[..., self.components:-self.components]
+        # variances
+        sigma = torch.exp(z[..., -self.components:])
         return alpha, mu, sigma
 
     def train(self, loader, optimiser):
@@ -41,10 +69,44 @@ class MDN(torch.nn.Module):
         y = dataset.y
         return {"loss": dist.nll_gaussian_mixture(*y_pred, y).mean()}
 
-    @torch.no_grad()
-    def predict(self, X):
-        return self(X)
-
 
 class DE(torch.nn.Module):
-    ...
+    def __init__(self, inputs, neurons, members):
+        super().__init__()
+        self.members = list()
+        for i in range(members):
+            # random initialisation for every member
+            self.members.append(MDN(inputs, neurons, 1))
+            self.add_module(f"member{i}", self.members[-1])
+
+    def forward(self, x):
+        output = [m(x) for m in self.members]
+        _, mus, sigmas = tuple(zip(*output))
+        mus, sigmas = torch.concat(mus, dim=-1), torch.concat(sigmas, dim=-1)
+        mu = torch.mean(mus, dim=-1, keepdim=True)
+        sigma = (torch.mean(sigmas + mus.square(), dim=-1, keepdim=True)
+                - mu.square())
+        return mu, sigma
+
+    def train(self, loader, optimiser):
+        for member in self.members:
+            for x, sample in loader:    # random shuffling for every member
+                optimiser.zero_grad()
+                mu, sigma = self(x)
+                loss = dist.nll_gaussian(mu, sigma, sample).mean()
+                loss.backward()
+                optimiser.step()
+
+    @torch.no_grad()
+    def evaluate(self, dataset):
+        y_pred = self(dataset.X)
+        y = dataset.y
+        return {"loss": dist.nll_gaussian(*y_pred, y).mean()}
+
+
+def params2dist(alpha, mu, sigma):
+    alpha = alpha.squeeze()
+    mu = mu.squeeze()
+    sigma = sigma.squeeze()
+    return dist.Mixture(alpha,
+                        [dist.Gaussian(m, s) for m, s in zip(mu, sigma)])

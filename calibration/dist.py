@@ -21,6 +21,10 @@ def nll_gaussian_mixture(weight, mean, variance, y):
                             - 0.5 * ((y - mean) ** 2 / variance), dim=-1)
 
 
+def nll_gaussian(mean, variance, y):
+    return nll_gaussian_mixture(torch.ones_like(mean), mean, variance, y)
+
+
 class Gaussian:
     def __init__(self, mean=torch.tensor(0.0), variance=torch.tensor(1.0)):
         self.mean = mean

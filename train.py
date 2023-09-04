@@ -7,7 +7,6 @@ import wandb
 from calibration import data
 from calibration import method
 from calibration import pit
-from calibration import train
 
 
 @click.group()
@@ -37,7 +36,7 @@ def interpreter(**hyperparams):
         model = method.MDN(config["bins"], config["neurons"], config["m"])
         model = model.to(device)
         optimiser = torch.optim.Adam(model.parameters(), lr=config["lr"])
-        train.early_stopping(model, loader, trainset, validset, optimiser, config)
+        method.early_stopping(model, loader, trainset, validset, optimiser, config)
         torch.save({"model_state_dict": model.state_dict(),
                     "hyperparams": dict(config)}, f"models/{run.name}.pt")
 
@@ -73,10 +72,11 @@ def regressor(**hyperparams):
         trainset = data.Dataset(X_train, y_train, device)
         validset = data.Dataset(X_valid, y_valid, device)
         loader = torch.utils.data.DataLoader(trainset, config["bs"], shuffle=True)
-        model = method.MDN(config["inputs"], config["neurons"], config["m"])
+        #model = method.MDN(config["inputs"], config["neurons"], config["m"])
+        model = method.DE(config["inputs"], config["neurons"], config["m"])
         model = model.to(device)
         optimiser = torch.optim.Adam(model.parameters(), lr=config["lr"])
-        train.early_stopping(model, loader, trainset, validset, optimiser, config)
+        method.early_stopping(model, loader, trainset, validset, optimiser, config)
         torch.save({"model_state_dict": model.state_dict(),
                     "hyperparams": dict(config)}, f"models/{run.name}.pt")
 
