@@ -58,16 +58,15 @@ class MDN(torch.nn.Module):
     def train(self, loader, optimiser):
         for x, sample in loader:
             optimiser.zero_grad()
-            alpha, mu, sigma = self(x)
-            loss = dist.nll_gaussian_mixture(alpha, mu, sigma, sample).mean()
+            y_pred = self(x)
+            loss = dist.nll_gaussian_mixture(sample, *y_pred).mean()
             loss.backward()
             optimiser.step()
 
     @torch.no_grad()
     def evaluate(self, dataset):
-        y_pred = self(dataset.X)
-        y = dataset.y
-        return {"loss": dist.nll_gaussian_mixture(*y_pred, y).mean()}
+        return {"loss":
+                dist.nll_gaussian_mixture(dataset.y, *self(dataset.X)).mean()}
 
 
 class DE(torch.nn.Module):
@@ -92,21 +91,11 @@ class DE(torch.nn.Module):
         for member in self.members:
             for x, sample in loader:    # random shuffling for every member
                 optimiser.zero_grad()
-                mu, sigma = self(x)
-                loss = dist.nll_gaussian(mu, sigma, sample).mean()
+                y_pred = self(x)
+                loss = dist.nll_gaussian(sample, *y_pred).mean()
                 loss.backward()
                 optimiser.step()
 
     @torch.no_grad()
     def evaluate(self, dataset):
-        y_pred = self(dataset.X)
-        y = dataset.y
-        return {"loss": dist.nll_gaussian(*y_pred, y).mean()}
-
-
-def params2dist(alpha, mu, sigma):
-    alpha = alpha.squeeze()
-    mu = mu.squeeze()
-    sigma = sigma.squeeze()
-    return dist.Mixture(alpha,
-                        [dist.Gaussian(m, s) for m, s in zip(mu, sigma)])
+        return {"loss": dist.nll_gaussian(dataset.y, *self(dataset.X)).mean()}

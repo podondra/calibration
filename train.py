@@ -72,8 +72,9 @@ def regressor(**hyperparams):
         trainset = data.Dataset(X_train, y_train, device)
         validset = data.Dataset(X_valid, y_valid, device)
         loader = torch.utils.data.DataLoader(trainset, config["bs"], shuffle=True)
-        #model = method.MDN(config["inputs"], config["neurons"], config["m"])
-        model = method.DE(config["inputs"], config["neurons"], config["m"])
+        # TODO choose method from CLI
+        model = method.MDN(config["inputs"], config["neurons"], config["m"])
+        #model = method.DE(config["inputs"], config["neurons"], config["m"])
         model = model.to(device)
         optimiser = torch.optim.Adam(model.parameters(), lr=config["lr"])
         method.early_stopping(model, loader, trainset, validset, optimiser, config)
