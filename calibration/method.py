@@ -16,6 +16,7 @@ def epochs(model, loader, trainset, validset, optimiser, hyperparams):
 
 
 def early_stopping(model, loader, trainset, validset, optimiser, hyperparams):
+    wandb.define_metric("valid.loss", summary="min")
     loss_best = float("inf")
     i = 0
     while i < hyperparams["patience"]:
@@ -29,7 +30,6 @@ def early_stopping(model, loader, trainset, validset, optimiser, hyperparams):
         else:
             i += 1
         wandb.log({"train": log_train, "valid": log_valid})
-        wandb.run.summary["valid.loss"] = loss_best
     model.load_state_dict(model_state_dict_best)
 
 
@@ -65,8 +65,14 @@ class MDN(torch.nn.Module):
 
     @torch.no_grad()
     def evaluate(self, dataset):
-        return {"loss":
-                dist.nll_gaussian_mixture(dataset.y, *self(dataset.X)).mean()}
+        alpha, mu, sigma = self(dataset.X)
+        mu = dataset.y_scaler.inverse_transform(mu)
+        sigma = dataset.y_scaler.inverse_transform_sigma(sigma)
+        y = dataset.y_scaler.inverse_transform(dataset.y)
+        log = {"crps": dist.crps_gaussian_mixture(y, alpha, mu, sigma).mean(),
+               "nll": dist.nll_gaussian_mixture(y, alpha, mu, sigma).mean()}
+        log["loss"] = log["nll"]
+        return log
 
 
 class DE(torch.nn.Module):
@@ -98,4 +104,11 @@ class DE(torch.nn.Module):
 
     @torch.no_grad()
     def evaluate(self, dataset):
-        return {"loss": dist.nll_gaussian(dataset.y, *self(dataset.X)).mean()}
+        mu, sigma = self(dataset.X)
+        mu = dataset.y_scaler.inverse_transform(mu)
+        sigma = dataset.y_scaler.inverse_transform_sigma(sigma)
+        y = dataset.y_scaler.inverse_transform(dataset.y)
+        log = {"crps": dist.crps_gaussian(y, mu, sigma).mean(),
+               "nll": dist.nll_gaussian(y, mu, sigma).mean()}
+        log["loss"] = log["nll"]
+        return log
