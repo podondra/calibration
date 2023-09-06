@@ -1,6 +1,9 @@
 import pandas
 import torch
 
+from . import dist
+from . import method
+
 
 def protein():
     # Physicochemical Properties of Protein Tertiary Structure
@@ -17,15 +20,8 @@ def power():
 
 
 def year():
-    # YearPredictionMSD
+    # Year Prediction MSD
     # https://archive.ics.uci.edu/dataset/203/yearpredictionmsd
-    #
-    # TODO
-    # You should respect the following train / test split:
-    # train: first 463,715 examples
-    # test: last 51,630 examples
-    # It avoids the 'producer effect' by making sure no song
-    # from a given artist ends up in both the train and test set.
     df = pandas.read_csv("data/YearPredictionMSD.txt", header=None)
     return df.values[:, 1:], df.values[:, :1]
 
@@ -40,9 +36,7 @@ class StandardScaler:
 
     def fit(self, X):
         self.mean = torch.mean(X, dim=0)
-        # TODO verify unbiased
-        self.sd = torch.std(X, dim=0, unbiased=True)
-        # TODO self.sd[self.sd == 0.0] = 1.0
+        self.sd = torch.std(X, dim=0)
         self.variance = self.sd ** 2
         return self
 
@@ -66,6 +60,7 @@ class UCIDataset(torch.utils.data.Dataset):
         if y_scaler is None:
             self.y_scaler = StandardScaler().fit(y)
         self.X = self.X_scaler.transform(X)
+        self.y_original = y.clone()
         self.y = self.y_scaler.transform(y)
 
     def __getitem__(self, i):
@@ -73,3 +68,14 @@ class UCIDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.y)
+
+    def evaluate(self, model):
+        alpha, mu, sigma = method.predict(model, self.X)
+        mu = self.y_scaler.inverse_transform(mu)
+        sigma = self.y_scaler.inverse_transform_sigma(sigma)
+        log = {"crps": dist.crps_gaussian_mixture(self.y_original,
+                                                  alpha, mu, sigma).mean(),
+               "nll": dist.nll_gaussian_mixture(self.y_original,
+                                                alpha, mu, sigma).mean()}
+        log["loss"] = log["nll"]
+        return log

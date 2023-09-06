@@ -64,7 +64,7 @@ def experiment(model, X, y, hyperparams):
     optimiser = torch.optim.Adam(model.parameters(), lr=hyperparams["lr"])
     method.early_stopping(model, loader, trainset, validset, optimiser, hyperparams)
     testset = data.UCIDataset(X_test, y_test, trainset.X_scaler, trainset.y_scaler, device)
-    log_test = model.evaluate(testset)
+    log_test = testset.evaluate(model)
     wandb.run.summary["test.nll"] = log_test["nll"]
     wandb.run.summary["test.crps"] = log_test["crps"]
     torch.save({"model_state_dict": model.state_dict(),

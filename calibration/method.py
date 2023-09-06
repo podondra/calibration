@@ -10,8 +10,8 @@ from . import dist
 def epochs(model, loader, trainset, validset, optimiser, hyperparams):
     for _ in range(hyperparams["epochs"]):
         model.train(loader, optimiser)
-        log_train = model.evaluate(trainset)
-        log_valid = model.evaluate(validset)
+        log_train = trainset.evaluate(model)
+        log_valid = validset.evaluate(model)
         wandb.log({"train": log_train, "valid": log_valid})
 
 
@@ -21,8 +21,8 @@ def early_stopping(model, loader, trainset, validset, optimiser, hyperparams):
     i = 0
     while i < hyperparams["patience"]:
         model.train(loader, optimiser)
-        log_train = model.evaluate(trainset)
-        log_valid = model.evaluate(validset)
+        log_train = trainset.evaluate(model)
+        log_valid = validset.evaluate(model)
         if log_valid["loss"] < loss_best:
             loss_best = log_valid["loss"]
             model_state_dict_best = copy.deepcopy(model.state_dict())
@@ -63,17 +63,6 @@ class MDN(torch.nn.Module):
             loss.backward()
             optimiser.step()
 
-    @torch.no_grad()
-    def evaluate(self, dataset):
-        alpha, mu, sigma = self(dataset.X)
-        mu = dataset.y_scaler.inverse_transform(mu)
-        sigma = dataset.y_scaler.inverse_transform_sigma(sigma)
-        y = dataset.y_scaler.inverse_transform(dataset.y)
-        log = {"crps": dist.crps_gaussian_mixture(y, alpha, mu, sigma).mean(),
-               "nll": dist.nll_gaussian_mixture(y, alpha, mu, sigma).mean()}
-        log["loss"] = log["nll"]
-        return log
-
 
 class DE(torch.nn.Module):
     def __init__(self, inputs, neurons, members):
@@ -91,24 +80,13 @@ class DE(torch.nn.Module):
         mu = torch.mean(mus, dim=-1, keepdim=True)
         sigma = (torch.mean(sigmas + mus.square(), dim=-1, keepdim=True)
                 - mu.square())
-        return mu, sigma
+        return torch.ones_like(mu), mu, sigma
 
     def train(self, loader, optimiser):
         for member in self.members:
             for x, sample in loader:    # random shuffling for every member
                 optimiser.zero_grad()
-                y_pred = self(x)
-                loss = dist.nll_gaussian(sample, *y_pred).mean()
+                _, mu, sigma = self(x)
+                loss = dist.nll_gaussian(sample, mu, sigma).mean()
                 loss.backward()
                 optimiser.step()
-
-    @torch.no_grad()
-    def evaluate(self, dataset):
-        mu, sigma = self(dataset.X)
-        mu = dataset.y_scaler.inverse_transform(mu)
-        sigma = dataset.y_scaler.inverse_transform_sigma(sigma)
-        y = dataset.y_scaler.inverse_transform(dataset.y)
-        log = {"crps": dist.crps_gaussian(y, mu, sigma).mean(),
-               "nll": dist.nll_gaussian(y, mu, sigma).mean()}
-        log["loss"] = log["nll"]
-        return log
