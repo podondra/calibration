@@ -22,6 +22,8 @@ DATANAME = {"power": data.power,
 def train(context, **hyperparams):
     context.ensure_object(dict)
     context.obj = hyperparams
+    torch.manual_seed(hyperparams["seed"])
+    torch.backends.cudnn.benchmark = False
 
 
 @train.command()
@@ -32,8 +34,6 @@ def train(context, **hyperparams):
 def interpreter(context, **hyperparams):
     hyperparams |= context.obj
     with wandb.init(config=hyperparams) as run:
-        torch.manual_seed(hyperparams["seed"])
-        torch.backends.cudnn.benchmark = False
         device = torch.device(hyperparams["device"])
         valids = 1000
         validset = pit.PITDataset(valids, hyperparams["bins"], device=device)
@@ -55,9 +55,6 @@ def experiment(Model, hyperparams_model, hyperparams):
     hyperparams |= hyperparams_model
     with wandb.init(config=hyperparams) as run:
         device = torch.device(hyperparams["device"])
-        # TODO reproducility seems not to work
-        torch.manual_seed(hyperparams["seed"])
-        torch.backends.cudnn.benchmark = False
         trainset, validset, testset = data.split(X, y, hyperparams["seed"], device)
         loader = torch.utils.data.DataLoader(trainset, hyperparams["bs"], shuffle=True)
         model = Model(**hyperparams_model)
