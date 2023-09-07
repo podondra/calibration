@@ -1,4 +1,5 @@
 import pandas
+from sklearn import model_selection
 import torch
 
 from . import dist
@@ -79,3 +80,20 @@ class UCIDataset(torch.utils.data.Dataset):
                                                 alpha, mu, sigma).mean()}
         log["loss"] = log["nll"]
         return log
+
+
+def split(X, y, seed, device=None):
+    split_test = model_selection.train_test_split(X, y,
+                                                  test_size=0.1,
+                                                  random_state=seed)
+    X_train, X_test, y_train, y_test = split_test
+    split_valid = model_selection.train_test_split(X_train, y_train,
+                                                   test_size=0.1,
+                                                   random_state=79)
+    X_train, X_valid, y_train, y_valid = split_valid
+    trainset = UCIDataset(X_train, y_train, device=device)
+    validset = UCIDataset(X_valid, y_valid,
+                          trainset.X_scaler, trainset.y_scaler, device)
+    testset = UCIDataset(X_test, y_test,
+                         trainset.X_scaler, trainset.y_scaler, device)
+    return trainset, validset, testset
