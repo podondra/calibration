@@ -77,11 +77,12 @@ def experiment(model, X, y, hyperparams):
 @click.argument("dataname")
 @click.pass_context
 def dn(ctx, **hyperparams):
+    X, y = DATANAME[hyperparams["dataname"]]()
     hyperparams["method"] = "dn"
+    hyperparams["inputs"] = X.shape[-1]
     hyperparams |= ctx.obj
     with wandb.init(config=hyperparams) as run:
         config = wandb.config
-        X, y = DATANAME[hyperparams["dataname"]]()
         model = method.MDN(X.shape[-1], config["neurons"], 1)
         experiment(model, X, y, config)
 
@@ -93,11 +94,12 @@ def dn(ctx, **hyperparams):
 @click.argument("dataname")
 @click.pass_context
 def mdn(ctx, **hyperparams):
+    X, y = DATANAME[hyperparams["dataname"]]()
     hyperparams["method"] = "mdn"
+    hyperparams["inputs"] = X.shape[-1]
     hyperparams |= ctx.obj
     with wandb.init(config=hyperparams) as run:
         config = wandb.config
-        X, y = DATANAME[hyperparams["dataname"]]()
         model = method.MDN(X.shape[-1], config["neurons"], config["components"])
         experiment(model, X, y, config)
 
@@ -109,11 +111,12 @@ def mdn(ctx, **hyperparams):
 @click.argument("dataname")
 @click.pass_context
 def de(ctx, **hyperparams):
+    X, y = DATANAME[hyperparams["dataname"]]()
     hyperparams["method"] = "de"
+    hyperparams["inputs"] = X.shape[-1]
     hyperparams |= ctx.obj
     with wandb.init(config=hyperparams) as run:
         config = wandb.config
-        X, y = DATANAME[hyperparams["dataname"]]()
         model = method.DE(X.shape[-1], config["neurons"], config["members"])
         experiment(model, X, y, config)
 
