@@ -19,7 +19,8 @@ def pit_gaussian_mixture(x, weight, mean, variance):
 
 
 def pit_hist(x, bins=BINS):
-    return torch.histc(x, bins=bins, min=0, max=1) / len(x)
+    # TODO verify len(x) / bins or more precisely len(x) * (1 / bins)
+    return torch.histc(x, bins=bins, min=0, max=1) / (len(x) / bins)
 
 
 def random_pit_hist(samples, bins=BINS, device=None):
