@@ -1,5 +1,7 @@
 data/*
 !data/.gitkeep
+figures/*
+!figures/.gitkeep
 misc/
 models/*
 !models/.gitkeep
