@@ -28,23 +28,27 @@ def random_pit_hist(samples, bins=BINS, device=None):
     weights = torch.stack((weight, 1 - weight))
     # separation implies means
     x = 0.1 + 0.9 * torch.rand(torch.Size(), device=device)
-    separation = 2.0 * (1 - x ** 2)
+    separation = 2.0 * (1 - x**2)
     mean = torch.stack((-separation / 2, separation / 2))
     # variance
     variance = 2 ** (-2 + 4 * torch.rand(2, device=device))
     # generate
     y = dist.sample_gaussian_mixture(weights, mean, variance, samples, device)
-    X = pit_hist(pit_gaussian(y,
-                              mean=torch.tensor(0.0, device=device),
-                              variance=torch.tensor(1.0, device=device)), bins)
+    X = pit_hist(
+        pit_gaussian(
+            y,
+            mean=torch.tensor(0.0, device=device),
+            variance=torch.tensor(1.0, device=device),
+        ),
+        bins,
+    )
     annotation = torch.stack((weight, separation, variance[0], variance[1]))
     return X, y, annotation
 
 
 def evaluate(dataset, model):
     alpha, mu, sigma = method.predict(model, dataset.X)
-    return {"loss": dist.nll_gaussian_mixture(dataset.y,
-                                              alpha, mu, sigma).mean()}
+    return {"loss": dist.nll_gaussian_mixture(dataset.y, alpha, mu, sigma).mean()}
 
 
 class PITSampler(torch.utils.data.IterableDataset):
@@ -64,7 +68,7 @@ class PITSampler(torch.utils.data.IterableDataset):
         if self.i >= self.bs:
             raise StopIteration()
         X, y, _ = random_pit_hist(self.samples, self.bins, self.device)
-        self.X[self.i], self.y[self.i] = X, y   # save batch for evaluation
+        self.X[self.i], self.y[self.i] = X, y  # save batch for evaluation
         self.i += 1
         return X, y
 
@@ -100,7 +104,7 @@ class PITReference(torch.utils.data.Dataset):
         one = torch.tensor(1.0, device=device)
         weights = torch.linspace(0.0, 1.0, steps, device=device)
         x = torch.linspace(0.1, 1.0, steps, device=device)
-        separations = 2 * (1 - x ** 2)
+        separations = 2 * (1 - x**2)
         variances = torch.logspace(-2, 2, steps, base=2, device=device)
         # generate data
         self.n = len(separations) * len(weights) * len(variances) ** 2
@@ -116,11 +120,9 @@ class PITReference(torch.utils.data.Dataset):
                         weight = torch.stack((w, 1 - w))
                         mean = torch.stack((-s / 2, s / 2))
                         variance = torch.stack((v1, v2))
-                        self.y[i] = dist.sample_gaussian_mixture(weight,
-                                                                 mean,
-                                                                 variance,
-                                                                 samples,
-                                                                 device)
+                        self.y[i] = dist.sample_gaussian_mixture(
+                            weight, mean, variance, samples, device
+                        )
                         pit_values = pit_gaussian(self.y[i], zero, one)
                         self.X[i] = pit_hist(pit_values, bins)
                         self.annotation[i] = torch.stack((w, s, v1, v2))

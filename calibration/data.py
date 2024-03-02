@@ -38,7 +38,7 @@ class StandardScaler:
     def fit(self, X):
         self.mean = torch.mean(X, dim=0)
         self.sd = torch.std(X, dim=0)
-        self.variance = self.sd ** 2
+        self.variance = self.sd**2
         return self
 
     def transform(self, X):
@@ -74,26 +74,28 @@ class UCIDataset(torch.utils.data.Dataset):
         alpha, mu, sigma = method.predict(model, self.X)
         mu = self.y_scaler.inverse_transform(mu)
         sigma = self.y_scaler.inverse_transform_sigma(sigma)
-        log = {"crps": dist.crps_gaussian_mixture(self.y_original,
-                                                  alpha, mu, sigma).mean(),
-               "nll": dist.nll_gaussian_mixture(self.y_original,
-                                                alpha, mu, sigma).mean()}
+        log = {
+            "crps": dist.crps_gaussian_mixture(
+                self.y_original, alpha, mu, sigma
+            ).mean(),
+            "nll": dist.nll_gaussian_mixture(self.y_original, alpha, mu, sigma).mean(),
+        }
         log["loss"] = log["nll"]
         return log
 
 
 def split(X, y, seed, device=None):
-    split_test = model_selection.train_test_split(X, y,
-                                                  test_size=0.1,
-                                                  random_state=seed)
+    split_test = model_selection.train_test_split(
+        X, y, test_size=0.1, random_state=seed
+    )
     X_train, X_test, y_train, y_test = split_test
-    split_valid = model_selection.train_test_split(X_train, y_train,
-                                                   test_size=0.1,
-                                                   random_state=79)
+    split_valid = model_selection.train_test_split(
+        X_train, y_train, test_size=0.1, random_state=79
+    )
     X_train, X_valid, y_train, y_valid = split_valid
     trainset = UCIDataset(X_train, y_train, device=device)
-    validset = UCIDataset(X_valid, y_valid,
-                          trainset.X_scaler, trainset.y_scaler, device)
-    testset = UCIDataset(X_test, y_test,
-                         trainset.X_scaler, trainset.y_scaler, device)
+    validset = UCIDataset(
+        X_valid, y_valid, trainset.X_scaler, trainset.y_scaler, device
+    )
+    testset = UCIDataset(X_test, y_test, trainset.X_scaler, trainset.y_scaler, device)
     return trainset, validset, testset

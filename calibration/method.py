@@ -48,11 +48,11 @@ class MDN(torch.nn.Module):
     def forward(self, x):
         z = self.linear2(torch.tanh(self.linear1(x)))
         # mixing coefficients
-        alpha = torch.softmax(z[..., :self.components], dim=-1)
+        alpha = torch.softmax(z[..., : self.components], dim=-1)
         # means
-        mu = z[..., self.components:-self.components]
+        mu = z[..., self.components : -self.components]
         # variances
-        sigma = torch.exp(z[..., -self.components:])
+        sigma = torch.exp(z[..., -self.components :])
         return alpha, mu, sigma
 
     def train(self, loader, optimiser):
@@ -78,13 +78,12 @@ class DE(torch.nn.Module):
         _, mus, sigmas = tuple(zip(*output))
         mus, sigmas = torch.concat(mus, dim=-1), torch.concat(sigmas, dim=-1)
         mu = torch.mean(mus, dim=-1, keepdim=True)
-        sigma = (torch.mean(sigmas + mus.square(), dim=-1, keepdim=True)
-                - mu.square())
+        sigma = torch.mean(sigmas + mus.square(), dim=-1, keepdim=True) - mu.square()
         return torch.ones_like(mu), mu, sigma
 
     def train(self, loader, optimiser):
         for member in self.members:
-            for x, sample in loader:    # random shuffling for every member
+            for x, sample in loader:  # random shuffling for every member
                 optimiser.zero_grad()
                 _, mu, sigma = self(x)
                 loss = dist.nll_gaussian(sample, mu, sigma).mean()
