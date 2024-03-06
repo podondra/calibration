@@ -1,5 +1,4 @@
 import copy
-import math
 
 import torch
 import wandb
@@ -38,28 +37,33 @@ def predict(model, X):
     return model(X)
 
 
+def wasserstein_loss(parameters, alpha, mu, sigma):
+    weight = torch.stack((parameters[:, 0], 1 - parameters[:, 0]), dim=-1)
+    mean = torch.stack((-parameters[:, 1] / 2, parameters[:, 1] / 2), dim=-1)
+    variance = parameters[:, 2:]
+    return dist.one_wasserstein_distance(alpha, mu, sigma, weight, mean, variance)
+
+
 class MDN(torch.nn.Module):
-    def __init__(self, inputs, neurons, components):
+    def __init__(self, inputs, neurons, components, loss=dist.nll_gaussian_mixture):
         super().__init__()
-        self.components = components
         self.linear1 = torch.nn.Linear(inputs, neurons)
         self.linear2 = torch.nn.Linear(neurons, 3 * components)
+        self.components = components
+        self.loss = loss
 
     def forward(self, x):
         z = self.linear2(torch.tanh(self.linear1(x)))
-        # mixing coefficients
         alpha = torch.softmax(z[..., : self.components], dim=-1)
-        # means
         mu = z[..., self.components : -self.components]
-        # variances
         sigma = torch.exp(z[..., -self.components :])
         return alpha, mu, sigma
 
     def train(self, loader, optimiser):
-        for x, sample in loader:
+        for x, y in loader:
             optimiser.zero_grad()
             y_pred = self(x)
-            loss = dist.nll_gaussian_mixture(sample, *y_pred).mean()
+            loss = self.loss(y, *y_pred).mean()
             loss.backward()
             optimiser.step()
 
@@ -83,9 +87,10 @@ class DE(torch.nn.Module):
 
     def train(self, loader, optimiser):
         for member in self.members:
-            for x, sample in loader:  # random shuffling for every member
+            # random shuffling for every member
+            for x, y in loader:
                 optimiser.zero_grad()
-                _, mu, sigma = self(x)
-                loss = dist.nll_gaussian(sample, mu, sigma).mean()
+                _, mu, sigma = member(x)
+                loss = dist.nll_gaussian(y, mu, sigma).mean()
                 loss.backward()
                 optimiser.step()

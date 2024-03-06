@@ -3,13 +3,12 @@ import torch
 import wandb
 
 from calibration import data
+from calibration import dist
 from calibration import method
 from calibration import pit
 
 
-DATANAME = {"power": data.power,
-            "protein": data.protein,
-            "year": data.year}
+DATANAME = {"power": data.power, "protein": data.protein, "year": data.year}
 
 
 @click.group()
@@ -39,12 +38,19 @@ def interpreter(context, **hyperparams):
         validset = pit.PITDataset(valids, hyperparams["bins"], device=device)
         trainset = pit.PITSampler(hyperparams["bs"], hyperparams["bins"], device=device)
         loader = torch.utils.data.DataLoader(trainset, hyperparams["bs"])
-        model = method.MDN(hyperparams["bins"], hyperparams["neurons"], hyperparams["components"])
+        model = method.MDN(
+            hyperparams["bins"],
+            hyperparams["neurons"],
+            hyperparams["components"],
+            loss=method.wasserstein_loss,
+        )
         model = model.to(device)
         optimiser = torch.optim.Adam(model.parameters(), lr=hyperparams["lr"])
         method.early_stopping(model, loader, trainset, validset, optimiser, hyperparams)
-        torch.save({"model_state_dict": model.state_dict(),
-                    "hyperparams": dict(hyperparams)}, f"models/{run.name}.pt")
+        torch.save(
+            {"model_state_dict": model.state_dict(), "hyperparams": dict(hyperparams)},
+            f"models/{run.name}.pt",
+        )
 
 
 def experiment(Model, hyperparams_model, hyperparams):
@@ -64,8 +70,10 @@ def experiment(Model, hyperparams_model, hyperparams):
         log_test = testset.evaluate(model)
         wandb.run.summary["test.nll"] = log_test["nll"]
         wandb.run.summary["test.crps"] = log_test["crps"]
-        torch.save({"model_state_dict": model.state_dict(),
-                    "hyperparams": dict(hyperparams)}, f"models/{wandb.run.name}.pt")
+        torch.save(
+            {"model_state_dict": model.state_dict(), "hyperparams": dict(hyperparams)},
+            f"models/{wandb.run.name}.pt",
+        )
 
 
 @train.command()
