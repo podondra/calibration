@@ -8,9 +8,6 @@ from calibration import method
 from calibration import pit
 
 
-DATANAME = {"power": data.power, "protein": data.protein, "year": data.year}
-
-
 @click.group()
 @click.option("--bs", default=100)
 @click.option("--device", default="cuda")
@@ -55,29 +52,33 @@ def interpreter(context, **hyperparams):
 
 def experiment(Model, hyperparams_model, hyperparams):
     hyperparams["dataname"] = hyperparams_model["dataname"]
+    hyperparams["scale"] = hyperparams_model["scale"]
     del hyperparams_model["dataname"]
-    X, y = DATANAME[hyperparams["dataname"]]()
+    del hyperparams_model["scale"]
+    X, y = getattr(data, hyperparams["dataname"])()
     hyperparams_model["inputs"] = X.shape[-1]
     hyperparams |= hyperparams_model
     with wandb.init(config=hyperparams) as run:
         device = torch.device(hyperparams["device"])
-        trainset, validset, testset = data.split(X, y, hyperparams["seed"], device)
+        trainset, validset, testset = data.split(
+            X, y, hyperparams["seed"], hyperparams["scale"], device
+        )
         loader = torch.utils.data.DataLoader(trainset, hyperparams["bs"], shuffle=True)
-        model = Model(**hyperparams_model)
-        model = model.to(device)
+        model = Model(**hyperparams_model).to(device)
         optimiser = torch.optim.Adam(model.parameters(), lr=hyperparams["lr"])
         method.early_stopping(model, loader, trainset, validset, optimiser, hyperparams)
         log_test = testset.evaluate(model)
-        wandb.run.summary["test.nll"] = log_test["nll"]
-        wandb.run.summary["test.crps"] = log_test["crps"]
+        run.summary["test.nll"] = log_test["nll"]
+        run.summary["test.crps"] = log_test["crps"]
         torch.save(
             {"model_state_dict": model.state_dict(), "hyperparams": dict(hyperparams)},
-            f"models/{wandb.run.name}.pt",
+            f"models/{run.name}.pt",
         )
 
 
 @train.command()
 @click.option("--neurons", default=100)
+@click.option("--scale/--no-scale", default=True)
 @click.argument("dataname")
 @click.pass_context
 def dn(context, **hyperparams):
@@ -89,6 +90,7 @@ def dn(context, **hyperparams):
 @train.command()
 @click.option("--components", default=5)
 @click.option("--neurons", default=100)
+@click.option("--scale/--no-scale", default=True)
 @click.argument("dataname")
 @click.pass_context
 def mdn(context, **hyperparams):
@@ -99,6 +101,7 @@ def mdn(context, **hyperparams):
 @train.command()
 @click.option("--members", default=5)
 @click.option("--neurons", default=100)
+@click.option("--scale/--no-scale", default=True)
 @click.argument("dataname")
 @click.pass_context
 def de(context, **hyperparams):

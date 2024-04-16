@@ -11,10 +11,13 @@
     >>> sorted(random.sample(range(100), k=5))
     [4, 7, 8, 9, 15]
 
+    $ # generate synthetic multi-modal data set
+    $ python generate.py
+
     $ # train interpreter
     $ python train.py interpreter
     $ # train density network (dn) / deep ensemble (de) / mixture density network (mdn)
-    $ # on year / protein / power data set
+    $ # on synthetic / year / protein / power data set
     $ python train.py --seed=4 dn --neurons=50 power
     $ # see train.py Python script for more options
 

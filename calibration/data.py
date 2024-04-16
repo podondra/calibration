@@ -6,29 +6,39 @@ from . import dist
 from . import method
 
 
+def array2tensor(array):
+    return torch.from_numpy(array.astype("float32"))
+
+
 def protein():
     # Physicochemical Properties of Protein Tertiary Structure
     # https://archive.ics.uci.edu/dataset/265/physicochemical+properties+of+protein+tertiary+structure
     df = pandas.read_csv("data/CASP.csv")
-    return df.values[:, 1:], df.values[:, :1]
+    tensor = array2tensor(df.values)
+    return tensor[:, 1:], tensor[:, :1]
 
 
 def power():
     # Combined Cycle Power Plant
     # https://archive.ics.uci.edu/dataset/294/combined+cycle+power+plant
     df = pandas.read_excel("data/Folds5x2_pp.xlsx")
-    return df.values[:, :4], df.values[:, -1:]
+    tensor = array2tensor(df.values)
+    return tensor[:, :4], tensor[:, -1:]
 
 
 def year():
     # Year Prediction MSD
     # https://archive.ics.uci.edu/dataset/203/yearpredictionmsd
     df = pandas.read_csv("data/YearPredictionMSD.txt", header=None)
-    return df.values[:, 1:], df.values[:, :1]
+    tensor = array2tensor(df.values)
+    return tensor[:, 1:], tensor[:, :1]
 
 
-def array2tensor(array):
-    return torch.from_numpy(array.astype("float32"))
+def synthetic():
+    # generate data by running $ python generate.py
+    df = pandas.read_csv("data/synthetic.csv")
+    tensor = array2tensor(df.values)
+    return tensor[:, :1], tensor[:, 1:]
 
 
 class StandardScaler:
@@ -51,18 +61,16 @@ class StandardScaler:
         return self.variance * sigma
 
 
-class UCIDataset(torch.utils.data.Dataset):
-    def __init__(self, X, y, X_scaler=None, y_scaler=None, device=None):
-        X = array2tensor(X).to(device)
-        y = array2tensor(y).to(device)
-        self.X_scaler, self.y_scaler = X_scaler, y_scaler
-        if X_scaler is None:
-            self.X_scaler = StandardScaler().fit(X)
-        if y_scaler is None:
-            self.y_scaler = StandardScaler().fit(y)
-        self.X = self.X_scaler.transform(X)
+class Dataset(torch.utils.data.Dataset):
+    def __init__(self, X, y, X_scaler, y_scaler, device=None):
+        X, y = X.to(device), y.to(device)
+        if X_scaler is not None:
+            X = X_scaler.transform(X)
         self.y_original = y.clone()
-        self.y = self.y_scaler.transform(y)
+        if y_scaler is not None:
+            y = y_scaler.transform(y)
+        self.X, self.y = X, y
+        self.X_scaler, self.y_scaler = X_scaler, y_scaler
 
     def __getitem__(self, i):
         return self.X[i], self.y[i]
@@ -72,30 +80,25 @@ class UCIDataset(torch.utils.data.Dataset):
 
     def evaluate(self, model):
         alpha, mu, sigma = method.predict(model, self.X)
-        mu = self.y_scaler.inverse_transform(mu)
-        sigma = self.y_scaler.inverse_transform_sigma(sigma)
+        if self.y_scaler is not None:
+            mu = self.y_scaler.inverse_transform(mu)
+            sigma = self.y_scaler.inverse_transform_sigma(sigma)
         log = {
-            "crps": dist.crps_gaussian_mixture(
-                self.y_original, alpha, mu, sigma
-            ).mean(),
+            "crps": dist.crps_gaussian_mixture(self.y_original, alpha, mu, sigma).mean(),
             "nll": dist.nll_gaussian_mixture(self.y_original, alpha, mu, sigma).mean(),
         }
         log["loss"] = log["nll"]
         return log
 
 
-def split(X, y, seed, device=None):
-    split_test = model_selection.train_test_split(
-        X, y, test_size=0.1, random_state=seed
-    )
+def split(X, y, seed, scale, device=None):
+    split_test = model_selection.train_test_split(X, y, test_size=0.1, random_state=seed)
     X_train, X_test, y_train, y_test = split_test
-    split_valid = model_selection.train_test_split(
-        X_train, y_train, test_size=0.1, random_state=79
-    )
+    split_valid = model_selection.train_test_split(X_train, y_train, test_size=0.1, random_state=79)
     X_train, X_valid, y_train, y_valid = split_valid
-    trainset = UCIDataset(X_train, y_train, device=device)
-    validset = UCIDataset(
-        X_valid, y_valid, trainset.X_scaler, trainset.y_scaler, device
-    )
-    testset = UCIDataset(X_test, y_test, trainset.X_scaler, trainset.y_scaler, device)
+    X_scaler = StandardScaler().fit(X_train) if scale else None
+    y_scaler = StandardScaler().fit(y_train) if scale else None
+    trainset = Dataset(X_train, y_train, X_scaler, y_scaler, device)
+    validset = Dataset(X_valid, y_valid, X_scaler, y_scaler, device)
+    testset = Dataset(X_test, y_test, X_scaler, y_scaler, device)
     return trainset, validset, testset
