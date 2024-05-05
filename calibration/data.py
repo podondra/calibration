@@ -42,12 +42,12 @@ def synthetic():
 
 
 class StandardScaler:
-    def __init__(self):
-        pass
+    def __init__(self, device=None):
+        self.device = device
 
     def fit(self, X):
-        self.mean = torch.mean(X, dim=0)
-        self.sd = torch.std(X, dim=0)
+        self.mean = torch.mean(X, dim=0).to(self.device)
+        self.sd = torch.std(X, dim=0).to(self.device)
         self.variance = self.sd**2
         return self
 
@@ -96,8 +96,8 @@ def split(X, y, seed, scale, device=None):
     X_train, X_test, y_train, y_test = split_test
     split_valid = model_selection.train_test_split(X_train, y_train, test_size=0.1, random_state=79)
     X_train, X_valid, y_train, y_valid = split_valid
-    X_scaler = StandardScaler().fit(X_train) if scale else None
-    y_scaler = StandardScaler().fit(y_train) if scale else None
+    X_scaler = StandardScaler(device).fit(X_train) if scale else None
+    y_scaler = StandardScaler(device).fit(y_train) if scale else None
     trainset = Dataset(X_train, y_train, X_scaler, y_scaler, device)
     validset = Dataset(X_valid, y_valid, X_scaler, y_scaler, device)
     testset = Dataset(X_test, y_test, X_scaler, y_scaler, device)

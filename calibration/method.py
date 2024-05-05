@@ -66,31 +66,3 @@ class MDN(torch.nn.Module):
             loss = self.loss(y, *y_pred).mean()
             loss.backward()
             optimiser.step()
-
-
-class DE(torch.nn.Module):
-    def __init__(self, inputs, neurons, members):
-        super().__init__()
-        self.members = list()
-        for i in range(members):
-            # random initialisation for every member
-            self.members.append(MDN(inputs, neurons, 1))
-            self.add_module(f"member{i}", self.members[-1])
-
-    def forward(self, x):
-        output = [m(x) for m in self.members]
-        _, mus, sigmas = tuple(zip(*output))
-        mus, sigmas = torch.concat(mus, dim=-1), torch.concat(sigmas, dim=-1)
-        mu = torch.mean(mus, dim=-1, keepdim=True)
-        sigma = torch.mean(sigmas + mus.square(), dim=-1, keepdim=True) - mu.square()
-        return torch.ones_like(mu), mu, sigma
-
-    def train(self, loader, optimiser):
-        for member in self.members:
-            # random shuffling for every member
-            for x, y in loader:
-                optimiser.zero_grad()
-                _, mu, sigma = member(x)
-                loss = dist.nll_gaussian(y, mu, sigma).mean()
-                loss.backward()
-                optimiser.step()

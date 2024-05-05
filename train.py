@@ -77,17 +77,6 @@ def experiment(Model, hyperparams_model, hyperparams):
 
 
 @train.command()
-@click.option("--neurons", default=100)
-@click.option("--scale/--no-scale", default=True)
-@click.argument("dataname")
-@click.pass_context
-def dn(context, **hyperparams):
-    context.obj["method"] = "dn"
-    hyperparams["components"] = 1
-    experiment(method.MDN, hyperparams, context.obj)
-
-
-@train.command()
 @click.option("--components", default=5)
 @click.option("--neurons", default=100)
 @click.option("--scale/--no-scale", default=True)
@@ -96,17 +85,6 @@ def dn(context, **hyperparams):
 def mdn(context, **hyperparams):
     context.obj["method"] = "mdn"
     experiment(method.MDN, hyperparams, context.obj)
-
-
-@train.command()
-@click.option("--members", default=5)
-@click.option("--neurons", default=100)
-@click.option("--scale/--no-scale", default=True)
-@click.argument("dataname")
-@click.pass_context
-def de(context, **hyperparams):
-    context.obj["method"] = "de"
-    experiment(method.DE, hyperparams, context.obj)
 
 
 if __name__ == "__main__":

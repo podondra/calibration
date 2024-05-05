@@ -1,4 +1,4 @@
-# Automatic Calibration Diagnosis: Interpreting Probability Integral Transform (PIT) Histograms
+# Automatic Miscalibration Diagnosis
 
     $ # installation (originally with Python 3.10.4 and CUDA 11.7)
     $ virtualenv venv
@@ -11,14 +11,14 @@
     >>> sorted(random.sample(range(100), k=5))
     [4, 7, 8, 9, 15]
 
-    $ # generate synthetic multi-modal data set
+    $ # generate synthetic multimodal data set
     $ python generate.py
 
     $ # train interpreter
     $ python train.py interpreter
-    $ # train density network (dn) / deep ensemble (de) / mixture density network (mdn)
+    $ # train density network or mixture density network
     $ # on synthetic / year / protein / power data set
-    $ python train.py --seed=4 dn --neurons=50 power
+    $ python train.py --seed 4 mdn --components 1 --neurons=50 power
     $ # see train.py Python script for more options
 
     $ # explore experiment.ipynb Jupyter notebook
